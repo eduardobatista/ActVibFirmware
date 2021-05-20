@@ -111,8 +111,8 @@ controlVariables input;
 controlVariables output;
 
 bool reading = false; // Flag for continous reading mode on or off
-bool controlling = true; // Flag for control mode on or off
-bool algOn = true; // Flag indicating wheter the control algorithm is on or off
+bool controlling = false; // Flag for control mode on or off
+bool algOn = false; // Flag indicating wheter the control algorithm is on or off
 
 int sr = 0;  // Stores commands read from the computer host.
 char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
@@ -164,45 +164,47 @@ void Reading(void * parameter){
   
   for (;;) {
     esp_task_wdt_reset(); // Resets watchdog
-    
-    input.xref = dcr[0].filter(mpus[idsmpus[0]].readSensor(idsensors[0]));
-    input.xerr = dcr[1].filter(mpus[idsmpus[1]].readSensor(idsensors[1]));
 
-    if (algOn) { 
-      if (algchoice == 0) {
-      } else if (algchoice == 2) {
-        tafxnlms.update(input.xerr);
+    if (controlling){
+      input.xref = dcr[0].filter(mpus[idsmpus[0]].readSensor(idsensors[0]));
+      input.xerr = dcr[1].filter(mpus[idsmpus[1]].readSensor(idsensors[1]));
+  
+      if (algOn) { 
+        if (algchoice == 0) {
+        } else if (algchoice == 2) {
+          tafxnlms.update(input.xerr);
+        }
       }
-    }
-      
-    xreff = input.xref - filtfbk.filter(lastout);
-      
-    // if (algchoice == 0) {
-    //   fxnlms.filter(input.xreff);
-    //   lastout = fxnlms.y;
-    // } else if (algchoice == 2) {
-    //   tafxnlms.filter(input.xreff,filtfbk.y);
-    //   lastout = tafxnlms.y;
-    // }      
-    if (algOn) { 
-      if (algchoice == 0) {
-        fxnlms.filter(xreff);
-        lastout = fxnlms.y;
-      } else if (algchoice == 2) {
-        tafxnlms.filter(xreff,filtfbk.y);
-        lastout = tafxnlms.y;
+        
+      xreff = input.xref - filtfbk.filter(lastout);
+        
+      // if (algchoice == 0) {
+      //   fxnlms.filter(input.xreff);
+      //   lastout = fxnlms.y;
+      // } else if (algchoice == 2) {
+      //   tafxnlms.filter(input.xreff,filtfbk.y);
+      //   lastout = tafxnlms.y;
+      // }      
+      if (algOn) { 
+        if (algchoice == 0) {
+          fxnlms.filter(xreff);
+          lastout = fxnlms.y;
+        } else if (algchoice == 2) {
+          tafxnlms.filter(xreff,filtfbk.y);
+          lastout = tafxnlms.y;
+        }
+        //outputaux = ((int)round(lastout))+128;
+        input.outputaux = 128 - ((int)round(lastout));
+        if (input.outputaux > 255) { input.outputaux = 255; input.ctrlflags = 1; }
+        else if (input.outputaux < 0) { input.outputaux = 0; input.ctrlflags = 1; }
+        else { input.ctrlflags = 0; } 
+      } else {
+        input.outputaux = 128;
+        input.ctrlflags = 0;
       }
-      //outputaux = ((int)round(lastout))+128;
-      input.outputaux = 128 - ((int)round(lastout));
-      if (input.outputaux > 255) { input.outputaux = 255; input.ctrlflags = 1; }
-      else if (input.outputaux < 0) { input.outputaux = 0; input.ctrlflags = 1; }
-      else { input.ctrlflags = 0; } 
-    } else {
-      input.outputaux = 128;
-      input.ctrlflags = 0;
+  
+      queue.push(input);  
     }
-
-    queue.push(input);
   }
 }
 
@@ -223,34 +225,38 @@ UBaseType_t uxHighWaterMark;
     */
     esp_task_wdt_reset(); // Resets task watchdog
 
-    output = queue.pop();
-    
-    int a = ESP.getCycleCount(); 
-      
-    writeOutput(canalperturb,siggen[canalperturb].next());
-    writeOutput(canalcontrole,output.outputaux);
-
-     // writeOutput(canalperturb,siggen[canalperturb].next());
-      // writeOutput(canalcontrole,outputaux);
-      
-      // Sending data to the host computer: --------------------------
-      // The first three bytes are used for synchronization. 
-      // Syncronization needs to be improved, but it is working fine.
-      Serial.write(0xF);
-      Serial.write(0xF);
-      Serial.write(0xF);
-      //Serial.write((*siggenperturb).last);
-      Serial.write(siggen[canalperturb].last);
-      Serial.write(output.outputaux);
-      *(float *) &cbuf[0] = output.xref;
-      *(float *) &cbuf[4] = output.xerr;
-      Serial.write(&cbuf[0],4);
-      Serial.write(&cbuf[4],4);    
-      Serial.write(output.ctrlflags);
-      a = (ESP.getCycleCount()-a) >> 4;
-      Serial.write((a >> 8 & 0xFF));
-      Serial.write(a & 0xFF);
-      // --------------------------------------------------------------
+    if (controlling){
+      if (queue.count() != 0){
+        output = queue.pop();
+        
+        int a = ESP.getCycleCount(); 
+          
+        writeOutput(canalperturb,siggen[canalperturb].next());
+        writeOutput(canalcontrole,output.outputaux);
+  
+       // writeOutput(canalperturb,siggen[canalperturb].next());
+        // writeOutput(canalcontrole,outputaux);
+        
+        // Sending data to the host computer: --------------------------
+        // The first three bytes are used for synchronization. 
+        // Syncronization needs to be improved, but it is working fine.
+        Serial.write(0xF);
+        Serial.write(0xF);
+        Serial.write(0xF);
+        //Serial.write((*siggenperturb).last);
+        Serial.write(siggen[canalperturb].last);
+        Serial.write(output.outputaux);
+        *(float *) &cbuf[0] = output.xref;
+        *(float *) &cbuf[4] = output.xerr;
+        Serial.write(&cbuf[0],4);
+        Serial.write(&cbuf[4],4);    
+        Serial.write(output.ctrlflags);
+        a = (ESP.getCycleCount()-a) >> 4;
+        Serial.write((a >> 8 & 0xFF));
+        Serial.write(a & 0xFF);
+        // --------------------------------------------------------------
+      }
+    }
 
     // Commands through Serial Monitor 
     if ((hascmd == 0) && (Serial.available() > 0) ) {

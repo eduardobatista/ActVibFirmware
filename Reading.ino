@@ -164,41 +164,46 @@ void Reading(void * parameter){
   
   for (;;) {
     esp_task_wdt_reset(); // Resets watchdog
-
+    
     // Blocks until reaching the time (clock-cycle count) for the next sampling period: ------------ 
-    while ( ((nextperiod-ESP.getCycleCount()) >> 31) == 0 ) {
-      int auxxxx = 1; // random instructions
-      auxxxx = auxxxx + 2; // random instructions
-    }
-    nextperiod = nextperiod + Tsamplecycles;
-    // ---------------------------------------------------------------------------------------------
-   
-    // LSM6DS3
-    SPI.beginTransaction(SPISettings(spiClk, MSBFIRST, SPI_MODE0));
-    digitalWrite(VSPI_SS, LOW);
-    //Get all parameters
-    input.xAcceLSM = SensorOne.readFloatGyroX();
-    input.yAcceLSM = SensorOne.readFloatGyroY();
-    input.zAcceLSM = SensorOne.readFloatGyroZ();
-    input.xGyroLSM = SensorOne.readFloatAccelX();
-    input.yGyroLSM = SensorOne.readFloatAccelY();
-    input.zGyroLSM = SensorOne.readFloatAccelZ();
-    digitalWrite(VSPI_SS, HIGH);
-    SPI.endTransaction();
+      while ( ((nextperiod-ESP.getCycleCount()) >> 31) == 0 ) {
+        int auxxxx = 1; // random instructions
+        auxxxx = auxxxx + 2; // random instructions
+      }
+      nextperiod = nextperiod + Tsamplecycles;
+      // ---------------------------------------------------------------------------------------------
 
-    // MPU6050
-    mpus[sreading].readData();
-    for (i=0; i<17; i++){
-      input.MPUallData[i] = (mpus[sreading].buf[i]);
+    if (reading){
+      // LSM6DS3
+      SPI.beginTransaction(SPISettings(spiClk, MSBFIRST, SPI_MODE0));
+      digitalWrite(VSPI_SS, LOW);
+      //Get all parameters
+      input.xAcceLSM = SensorOne.readFloatGyroX();
+      input.yAcceLSM = SensorOne.readFloatGyroY();
+      input.zAcceLSM = SensorOne.readFloatGyroZ();
+      input.xGyroLSM = SensorOne.readFloatAccelX();
+      input.yGyroLSM = SensorOne.readFloatAccelY();
+      input.zGyroLSM = SensorOne.readFloatAccelZ();
+      digitalWrite(VSPI_SS, HIGH);
+      SPI.endTransaction();
+      
+      // MPU6050
+      mpus[sreading].readData();
+      for (i=0; i<17; i++){
+        input.MPUallData[i] = (mpus[sreading].buf[i]);
+        //esp_task_wdt_reset();
+      }
+      
+      if (adcconfig[0] == 1) {
+        input.valadc = adc.getValue();
+      } 
+      else {
+        input.valadc = 0;
+      }
+      // Pushes data from both sensors to the queue
+      queue.push(input);
+      Serial.println("reading ok");
     }
-    if (adcconfig[0] == 1) {
-      input.valadc = adc.getValue();
-    } 
-    else {
-      input.valadc = 0;
-    }
-    // Pushes data from both sensors to the queue
-    queue.push(input);
   }
 }
 
@@ -219,53 +224,54 @@ UBaseType_t uxHighWaterMark;
     */
     esp_task_wdt_reset(); // Resets task watchdog
 
-    // Writing data from the sensors 
-    if (queue.count() != 0){
-      // Gets all the struct data from the queue
-      output = queue.pop();
-
-      /*
-      // LSM6DS3 OUTPUT --------------------------------------------------------------------
-      OUTxAcceLSM = output.xAcceLSM;
-      OUTyAcceLSM = output.yAcceLSM;
-      OUTzAcceLSM = output.zAcceLSM;
-      OUTxGyroLSM = output.xGyroLSM;
-      OUTyGyroLSM = output.yGyroLSM;
-      OUTzGyroLSM = output.zGyroLSM;
-      /* Adicionar a forma de saída dos dados do LSM6DS3 para visualização no software */
-
-      // MPU6050 OUTPUT ---------------------------------------------------------------------
-      for (i = 0; i < 17; i++){
-        Serial.write(output.MPUallData[i]);
+    if (reading){
+      if (queue.count() != 0){
+        // Gets all the struct data from the queue
+        output = queue.pop();
+  
+        /*
+        // LSM6DS3 OUTPUT --------------------------------------------------------------------
+        OUTxAcceLSM = output.xAcceLSM;
+        OUTyAcceLSM = output.yAcceLSM;
+        OUTzAcceLSM = output.zAcceLSM;
+        OUTxGyroLSM = output.xGyroLSM;
+        OUTyGyroLSM = output.yGyroLSM;
+        OUTzGyroLSM = output.zGyroLSM;
+        /* Adicionar a forma de saída dos dados do LSM6DS3 para visualização no software */
+  
+        // MPU6050 OUTPUT ---------------------------------------------------------------------
+        for (i = 0; i < 17; i++){
+          Serial.write(output.MPUallData[i]);
+        }
+      }
+      
+      // DAC and ADC related code
+      if (siggen[0].enabled) { mcps[0].setValue(siggen[0].next()); }
+      else { mcps[0].setValue(0); } 
+      Serial.write((siggen[0].last >> 8) & 0x0F);
+      Serial.write(siggen[0].last & 0xFF);
+  
+      if (siggen[1].enabled) { mcps[1].setValue(siggen[1].next()); }
+      else { mcps[1].setValue(0); } 
+      Serial.write((siggen[1].last >> 8) & 0x0F);
+      Serial.write(siggen[1].last & 0xFF);
+      
+      if (siggen[2].enabled) { dacWrite(25,siggen[2].next()); }
+      else { dacWrite(25,0); }  
+      Serial.write(siggen[2].last);
+  
+      if (siggen[3].enabled) { dacWrite(26,siggen[3].next());}
+      else { dacWrite(26,0); }
+      Serial.write(siggen[3].last);
+  
+      if (adcconfig[0] == 1) {
+        Serial.write(output.valadc >> 8);
+        Serial.write(output.valadc & 0xFF);
+      } else {
+        Serial.write(0);
+        Serial.write(0);
       }
     }
-
-    // DAC and ADC related code
-    if (siggen[0].enabled) { mcps[0].setValue(siggen[0].next()); }
-        else { mcps[0].setValue(0); } 
-        Serial.write((siggen[0].last >> 8) & 0x0F);
-        Serial.write(siggen[0].last & 0xFF);
-
-        if (siggen[1].enabled) { mcps[1].setValue(siggen[1].next()); }
-        else { mcps[1].setValue(0); } 
-        Serial.write((siggen[1].last >> 8) & 0x0F);
-        Serial.write(siggen[1].last & 0xFF);
-
-        if (siggen[2].enabled) { dacWrite(25,siggen[2].next()); }
-        else { dacWrite(25,0); }  
-        Serial.write(siggen[2].last);
-
-        if (siggen[3].enabled) { dacWrite(26,siggen[3].next());}
-        else { dacWrite(26,0); }
-        Serial.write(siggen[3].last);
-
-        if (adcconfig[0] == 1) {
-            Serial.write(output.valadc >> 8);
-            Serial.write(output.valadc & 0xFF);
-        } else {
-            Serial.write(0);
-            Serial.write(0);
-        }
 
     // Commands through Serial Monitor 
     if ((hascmd == 0) && (Serial.available() > 0) ) {
@@ -585,6 +591,7 @@ UBaseType_t uxHighWaterMark;
 // Startup configuration:
 void setup() {
     Serial.begin(115200);
+    esp_task_wdt_init(8, true); //10s max task watchdog
 
     SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
     pinMode(VSPI_SS, OUTPUT);
