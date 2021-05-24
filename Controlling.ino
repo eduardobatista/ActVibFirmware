@@ -29,7 +29,7 @@ Preferences prefs;      // Preferences!
 // General Settings -----------------------------------------------------------------------
 const int mpu_sda_pin = 21; //D21; // definição do pino I2C SDA
 const int mpu_scl_pin = 22; //D22; // definição do pino I2C SCL
-// --------------------------------------------------------------------------------------
+// ----------------------------------------------------------------------------------------
 
 const float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
 const float T_SAMPLE = 0.004;  // Sampling period in seconds
@@ -57,7 +57,7 @@ ADS1115 adc(0x4B);
 LSM6DS3 SensorOne(SPI_MODE, 5);
 
 // Defining loop tasks
-TaskHandle_t reading1, writing1;
+TaskHandle_t reading1;
 
 /* 
    In the following, we have definitions for FIR filters used as
@@ -65,10 +65,10 @@ TaskHandle_t reading1, writing1;
    The lengths of the vector are a maximun values for the sake of memory allocation.
    The actual length of theses filters will be defined by software.
 */
-int Nsec = 0; // filter length
-float wsec[3000]; // Coef. vector
-float xsec[3000]; // Input vector
-FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]); // FIR filter declaration
+int Nsec = 0;                                         // filter length
+float wsec[3000];                                     // Coef. vector
+float xsec[3000];                                     // Input vector
+FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]);   // FIR filter declaration
 int Nfbk = 0;
 float wfbk[3000];
 float xfbk[3000];
@@ -110,33 +110,35 @@ Queue<controlVariables> queue = Queue<controlVariables>(10); // Queue of max 10 
 controlVariables input;
 controlVariables output;
 
-bool reading = false; // Flag for continous reading mode on or off
+bool reading = false;     // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
-bool algOn = false; // Flag indicating wheter the control algorithm is on or off
+bool algOn = false;       // Flag indicating wheter the control algorithm is on or off
 
-int sr = 0;  // Stores commands read from the computer host.
-char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
+int sr = 0;        // Stores commands read from the computer host.
+char hascmd = 0;   // Used for indicating if command from the computer host needs to be treated before accepting new commands.
 int cthascmd = 0;  // Indicates if the cmd has been treated. TODO: check if it is important or not, maybe could be changed to a flag. 
 
-int i; // Counter
-int sreading = 0;  // Indicates which sensor (0 or 1) is being read in reading mode. In this mode, all variables of only one sensor are read.
-int sensorchoice = 0;  // TODO: can be removed, but is used as a temporary storage for defining sreading.
-int algchoice = 0;  // 0 = FxNLMS is used for control, 2 = TAFxNLMS is used.
-int idsmpus[2] = {0,0}; // MPU ids to define with MPU is channel 1 and which is 2.
-int8_t idsensors[2] = {0,0}; // I2C adresses of the MPUs.
-float xreff = 0.0;  // xref - (feedback filter output). This signal is the input for the control algorithm.
-int canalperturb = 0;  // Definition of the actuator output used for generating the perturbation.
-int canalcontrole = 1;  // Definition of the actuator output used for injecting the control signal in the beam.
-float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.
+int i;                         // Counter
+int sreading = 0;              // Indicates which sensor (0 or 1) is being read in reading mode. In this mode, all variables of only one sensor are read.
+int sensorchoice = 0;          // TODO: can be removed, but is used as a temporary storage for defining sreading.
+int algchoice = 0;             // 0 = FxNLMS is used for control, 2 = TAFxNLMS is used.
+int idsmpus[2] = {0,0};        // MPU ids to define with MPU is channel 1 and which is 2.
+int8_t idsensors[2] = {0,0};   // I2C adresses of the MPUs.
+float xreff = 0.0;             // xref - (feedback filter output). This signal is the input for the control algorithm.
+int canalperturb = 0;          // Definition of the actuator output used for generating the perturbation.
+int canalcontrole = 1;         // Definition of the actuator output used for injecting the control signal in the beam.
+float lastout = 0;             // The last (float) value of the control signal, which feeds the feedback filter.
 unsigned char cbuf[BUF_SIZE];  // Buffer for storing the byte values before sending them to the host computer.
-// on 'controlVariables' struct:  
-// float xerr = 0.0;  // Error signal for the control algorithm (corresponds to the reading of the error accelerometer).
-// float xref = 0.0;  // Reference signal for the control algorithm (corresponds to the reading of the ref. accelerometer).
-//int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the 8-bit DAC. 
-//unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
+
+/* on 'controlVariables' struct:  
+float xerr = 0.0;  // Error signal for the control algorithm (corresponds to the reading of the error accelerometer).
+float xref = 0.0;  // Reference signal for the control algorithm (corresponds to the reading of the ref. accelerometer).
+int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the 8-bit DAC. 
+unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
+*/
 
 uint32_t Tsamplecycles = 1000;  // Sampling period in CPU cycles.
-uint32_t nextperiod = 0;  // Stores the cycle counter value that corresponding to the next system event. Events happen after each sampling period. 
+uint32_t nextperiod = 0;        // Stores the cycle counter value that corresponding to the next system event. Events happen after each sampling period. 
 
 /*
     Reading configuration data stored in the flash memory. 
@@ -159,12 +161,7 @@ void loadFlashData() {
 
 // Reading Task
 void Reading(void * parameter){
-  //Initializes watchdog
-  esp_task_wdt_add(NULL);
-  
   for (;;) {
-    esp_task_wdt_reset(); // Resets watchdog
-
     if (controlling){
       input.xref = dcr[0].filter(mpus[idsmpus[0]].readSensor(idsensors[0]));
       input.xerr = dcr[1].filter(mpus[idsmpus[1]].readSensor(idsensors[1]));
@@ -208,27 +205,65 @@ void Reading(void * parameter){
   }
 }
 
-void Writing(void * parameter){
-/*
-Função "marca d'água" para ver o espaço restante da stack para a task, 
-de acordo com o momento em que ela esteve em seu armazenamento máximo.
-Retorna um valor em words.
-UBaseType_t uxHighWaterMark;
-*/
-  //Initializes watchdog
-  esp_task_wdt_add(NULL);
-  for (;;){
-    /*
-    uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    Serial.print("Stack space left: ");
-    Serial.println(uxHighWaterMark);
-    */
-    esp_task_wdt_reset(); // Resets task watchdog
+// Startup configuration:
+void setup() {
+    Serial.begin(115200);
 
-    if (controlling){
+    SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
+    pinMode(VSPI_SS, OUTPUT);
+  
+    // Inicialização LSM6DS3
+    if( SensorOne.begin() != 0 ){
+        Serial.println("Problem starting the sensor with CS @ Pin 5.");
+    }
+    else{
+        Serial.println("Sensor with CS @ Pin 5 started.");
+    }
+
+    Wire.begin();
+    Wire.setClock(1000000L);
+ 
+    mpus[0].setI2C(&Wire);
+    mpus[0].initMPU();
+    mpus[0].checkMPU();
+
+    mpus[1].setI2C(&Wire);
+    mpus[1].initMPU();
+    mpus[1].checkMPU();
+    //if (mpu.responseOk) { Serial.write("\nMPU Response Ok!\n"); }
+
+    mcps[0].begin();
+    mcps[1].begin();
+
+    siggen[0].setType(0,0,10,2048);
+    siggen[1].setType(0,0,10,2048);
+    siggen[2].setType(0,0,10,128);
+    siggen[3].setType(0,0,10,128);
+
+    loadFlashData();
+
+    // Inicialização Core 0 (Leitura)
+    xTaskCreatePinnedToCore(
+        Reading,            /* Task function          */
+        "Reading Task",     /* Name of the task       */ 
+        1500,               /* Stack size of the task */
+        NULL,               /* Parameter of the task  */
+        1,                  /* Priority of the task   */
+        &reading1,          /* Task handle to keep track of the task */
+        0);                 /* Core 0 */
+    delay(500);  // needed to start-up Reading task
+  
+    Tsamplecycles = T_SAMPLE_us * ESP.getCpuFreqMHz(); // Sampling period in clock cycles 
+    nextperiod = ESP.getCycleCount();
+
+    esp_err_t esp_task_wdt_delete(TaskHandle_t reading1);
+}
+  
+void loop() {
+  esp_task_wdt_add(NULL);
+   if (controlling){
       if (queue.count() != 0){
         output = queue.pop();
-        
         int a = ESP.getCycleCount(); 
           
         writeOutput(canalperturb,siggen[canalperturb].next());
@@ -257,7 +292,8 @@ UBaseType_t uxHighWaterMark;
         // --------------------------------------------------------------
       }
     }
-
+    
+    esp_task_wdt_reset(); // Resets watchdog
     // Commands through Serial Monitor 
     if ((hascmd == 0) && (Serial.available() > 0) ) {
       sr = Serial.read();
@@ -570,72 +606,4 @@ UBaseType_t uxHighWaterMark;
         }
       }
     }
-  }
-}
-
-// Startup configuration:
-void setup() {
-    Serial.begin(115200);
-
-    SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
-    pinMode(VSPI_SS, OUTPUT);
-  
-    // Inicialização LSM6DS3
-    if( SensorOne.begin() != 0 ){
-        Serial.println("Problem starting the sensor with CS @ Pin 5.");
-    }
-    else{
-        Serial.println("Sensor with CS @ Pin 5 started.");
-    }
-
-    Wire.begin();
-    Wire.setClock(1000000L);
- 
-    mpus[0].setI2C(&Wire);
-    mpus[0].initMPU();
-    mpus[0].checkMPU();
-
-    mpus[1].setI2C(&Wire);
-    mpus[1].initMPU();
-    mpus[1].checkMPU();
-    //if (mpu.responseOk) { Serial.write("\nMPU Response Ok!\n"); }
-
-    mcps[0].begin();
-    mcps[1].begin();
-
-    siggen[0].setType(0,0,10,2048);
-    siggen[1].setType(0,0,10,2048);
-    siggen[2].setType(0,0,10,128);
-    siggen[3].setType(0,0,10,128);
-
-    loadFlashData();
-
-    // Inicialização Core 0 (Leitura)
-    xTaskCreatePinnedToCore(
-        Reading,            /* Task function          */
-        "Reading Task",     /* Name of the task       */ 
-        1500,               /* Stack size of the task */
-        NULL,               /* Parameter of the task  */
-        1,                  /* Priority of the task   */
-        &reading1,           /* Task handle to keep track of the task */
-        0);                 /* Core 0 */
-    delay(500);  // needed to start-up Reading task
-  
-    // Inicialização Core 1 (Escrita)
-    xTaskCreatePinnedToCore(
-        Writing,            /* Task function          */
-        "Writing Task",     /* Name of the task       */ 
-        1000,               /* Stack size of the task */
-        NULL,               /* Parameter of the task  */
-        1,                  /* Priority of the task   */
-        &writing1,           /* Task handle to keep track of the task */
-        1);                 /* Core 1 */
-        delay(500);  // needed to start-up Writing task
-
-    Tsamplecycles = T_SAMPLE_us * ESP.getCpuFreqMHz(); // Sampling period in clock cycles 
-    nextperiod = ESP.getCycleCount();
-}
-  
-void loop() {
-  //delay(10);
 }
