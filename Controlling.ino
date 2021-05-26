@@ -3,7 +3,6 @@
 #include <Ticker.h>       // Timing
 #include <Preferences.h>  // Allows recording preferences in non-volatile memory
 #include <math.h>         // Math
-#include <esp_task_wdt.h> // ESP32 Task Watchdog
 
 #include "DSPfuncs.h"
 #include "MPU6050A.h"
@@ -66,6 +65,7 @@ TaskHandle_t reading1;
    The actual length of theses filters will be defined by software.
 */
 int Nsec = 0;                                         // filter length
+int num = 10;                                         // Number of spaces for the queues
 float wsec[3000];                                     // Coef. vector
 float xsec[3000];                                     // Input vector
 FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]);   // FIR filter declaration
@@ -105,7 +105,7 @@ struct controlVariables{
 };
 
 //Queue used to exchange data between reading and writing tasks
-Queue<controlVariables> queue = Queue<controlVariables>(10); // Queue of max 10 'sensorsData', where 'sensorsData' is a struct
+Queue<controlVariables> queue = Queue<controlVariables>(num); // Queue of max 10 'sensorsData', where 'sensorsData' is a struct
 
 controlVariables input;
 controlVariables output;
@@ -200,7 +200,14 @@ void Reading(void * parameter){
         input.ctrlflags = 0;
       }
   
-      queue.push(input);  
+      // Pushes data to the queue
+      if (queue.count() == num){   // Queue is full
+        queue.pop();               // Deletes the first item of the queue
+        queue.push(input);         // Adds the most recent data package to back of the queue
+      }
+      else { // There is free space to be filled on the queue
+        queue.push(input); 
+      }
     }
   }
 }
@@ -252,15 +259,13 @@ void setup() {
         &reading1,          /* Task handle to keep track of the task */
         0);                 /* Core 0 */
     delay(500);  // needed to start-up Reading task
-  
+
+    disableCore0WDT();
     Tsamplecycles = T_SAMPLE_us * ESP.getCpuFreqMHz(); // Sampling period in clock cycles 
     nextperiod = ESP.getCycleCount();
-
-    esp_err_t esp_task_wdt_delete(TaskHandle_t reading1);
 }
   
 void loop() {
-  esp_task_wdt_add(NULL);
    if (controlling){
       if (queue.count() != 0){
         output = queue.pop();
@@ -292,8 +297,7 @@ void loop() {
         // --------------------------------------------------------------
       }
     }
-    
-    esp_task_wdt_reset(); // Resets watchdog
+
     // Commands through Serial Monitor 
     if ((hascmd == 0) && (Serial.available() > 0) ) {
       sr = Serial.read();

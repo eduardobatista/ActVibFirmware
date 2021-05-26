@@ -3,7 +3,6 @@
 #include <Ticker.h>       // Timing
 #include <Preferences.h>  // Allows recording preferences in non-volatile memory
 #include <math.h>         // Math
-#include <esp_task_wdt.h> // ESP32 Task Watchdog
 
 #include "DSPfuncs.h"
 #include "MPU6050A.h"
@@ -66,6 +65,7 @@ TaskHandle_t reading1;
    The actual length of theses filters will be defined by software.
 */
 int Nsec = 0;                                         // filter length
+int num = 10;                                         // Number of spaces for the queues
 float wsec[3000];                                     // Coef. vector
 float xsec[3000];                                     // Input vector
 FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]);   // FIR filter declaration
@@ -106,7 +106,7 @@ struct sensorsData{
 };
 
 //Queue used to exchange data between reading and writing tasks
-Queue<sensorsData> queue = Queue<sensorsData>(10); // Queue of max 10 'sensorsData', where 'sensorsData' is a struct
+Queue<sensorsData> queue = Queue<sensorsData>(num); // Queue of max num 'sensorsData', where 'sensorsData' is a struct
 
 sensorsData input;
 sensorsData output;
@@ -194,9 +194,15 @@ void Reading(void * parameter){
       else {
         input.valadc = 0;
       }
+
       // Pushes data from both sensors to the queue
-      queue.push(input);
-      Serial.println("reading ok");
+      if (queue.count() == num){   // Queue is full
+        queue.pop();               // Deletes the first item of the queue
+        queue.push(input);         // Adds the most recent data package to back of the queue
+      }
+      else { // There is free space to be filled on the queue
+        queue.push(input); 
+      }
     }
   }
 }
@@ -204,8 +210,7 @@ void Reading(void * parameter){
 // Startup configuration:
 void setup() {
     Serial.begin(115200);
-    esp_task_wdt_init(8, true); // Maximum time, in seconds, for the Task Watchdog
-
+    
     SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
     pinMode(VSPI_SS, OUTPUT);
   
@@ -250,10 +255,9 @@ void setup() {
         0);                 /* Core 0 */
     delay(500);             // needed to start-up Reading task
 
+    disableCore0WDT();
     Tsamplecycles = T_SAMPLE_us * ESP.getCpuFreqMHz(); // Sampling period in clock cycles 
     nextperiod = ESP.getCycleCount();
-
-    esp_err_t esp_task_wdt_delete(TaskHandle_t reading1);
 }
   
 void loop() {
