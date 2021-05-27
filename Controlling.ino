@@ -65,7 +65,7 @@ TaskHandle_t reading1;
    The actual length of theses filters will be defined by software.
 */
 int Nsec = 0;                                         // filter length
-int num = 10;                                         // Number of spaces for the queues
+int num = 2;                                         // Number of spaces for the queues
 float wsec[3000];                                     // Coef. vector
 float xsec[3000];                                     // Input vector
 FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]);   // FIR filter declaration
