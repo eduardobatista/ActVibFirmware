@@ -15,8 +15,7 @@
 
         private:
             float F_SAMPLE;
-            float T_SAMPLE;
-            int Z_LEVEL;
+            float T_SAMPLE;            
             int STD_Z_LEVEL;
             float levelscaler;
             int type;
@@ -35,11 +34,13 @@
             float A2;
             float AA2;
             float integ2;
-            float cA2;   
+            float cA2;
+            int Psize2;
 
         public:
             int last;
             bool enabled;
+            int Z_LEVEL;
             SignalGenerator(float fsampling, float tsampling, int stdzlevel);
             void setType(int tp, float Amp, float freq, int dclevel);
             void setChirpParams(int ti, int di, int tf, int df, int a2);

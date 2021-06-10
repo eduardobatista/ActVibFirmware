@@ -17,19 +17,19 @@
             const int INT_PIN_CFG = 0x37; 
             const int USER_CTRL = 0x6A; 
             int MPU_ADDR = 0x68; //0x68; // definição do endereço do sensor MPU6050 (0x68)
-            TwoWire TWire = TwoWire(0);
+            TwoWire* TWire;
             void writeRegMPU(int reg, int val);
             uint8_t readRegMPU(uint8_t reg);
             void findMPU(int mpu_addr);
         
         public:
-            uint8_t buf[17];
+            uint8_t buf[14];
             bool found;
             bool responseOk;
             int powermode;
             float accscale;
             float gyroscale;
-            MPU6050A(int addr);
+            MPU6050A(int addr, TwoWire *tw);
             void setI2C(TwoWire *tw);
             void checkMPU();
             void setGyroScale(uint8_t conf);
@@ -39,7 +39,9 @@
             void setFilter(uint8_t val);
             void enableBypass(bool val);
             float readSensor(int id);
-            void readData();
+            void readData(uint8_t *outputpointer);
+            void setAddress(int addr);
+            int getAddress();
 
     };
 

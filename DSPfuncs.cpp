@@ -69,6 +69,12 @@ void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel) {
         n = -1.0;
         integ = 0.0;
         cA = Amp/(2*M_PI*freq*2*M_PI*freq);
+    } else if (type == 4) {
+        A = Amp;
+        f = freq; 
+        Psize2 = ((int)round(1.0/freq / T_SAMPLE)) >> 1; 
+        n = -1.0;
+        last = Z_LEVEL - (int)round(A);
     }
     if (Amp == 0.0) { 
         enabled = false; 
@@ -113,6 +119,13 @@ int SignalGenerator::next() {
         //integ2 = integ2 + 2.0 * M_PI * (2*ff) * T_SAMPLE;
         //last = (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ))  + 128;
         last = Z_LEVEL - ( (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ)) );
+        return last;
+      } else if (type == 4) {
+        n = n + 1.0;
+        if ( ((int)n) % Psize2 == 0 ) {
+          A = -A;
+        }
+        last = Z_LEVEL - (int)round(A);
         return last;
       }
 }

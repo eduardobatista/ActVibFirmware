@@ -4,7 +4,8 @@
 
 #define GtoMS2 9.80665  // To convert g to m/s^2 
 
-MPU6050A::MPU6050A(int addr) {
+MPU6050A::MPU6050A(int addr, TwoWire *tw) {
+    TWire = tw;
     MPU_ADDR = addr;
     found = false;
     responseOk = false;
@@ -14,25 +15,25 @@ MPU6050A::MPU6050A(int addr) {
 }
 
 void MPU6050A::writeRegMPU(int reg, int val) {
-    TWire.beginTransmission(MPU_ADDR);     // inicia comunicação com endereço do MPU6050
-    TWire.write(reg);                      // envia o registro com o qual se deseja trabalhar
-    TWire.write(val);                      // escreve o valor no registro
-    TWire.endTransmission(true);           // termina a transmissão
+    TWire->beginTransmission(MPU_ADDR);     // inicia comunicação com endereço do MPU6050
+    TWire->write(reg);                      // envia o registro com o qual se deseja trabalhar
+    TWire->write(val);                      // escreve o valor no registro
+    TWire->endTransmission(true);           // termina a transmissão
 }
 
 uint8_t MPU6050A::readRegMPU(uint8_t reg) {
     uint8_t data;
-    TWire.beginTransmission(MPU_ADDR);     // inicia comunicação com endereço do MPU6050
-    TWire.write(reg);                      // envia o registro com o qual se deseja trabalhar
-    TWire.endTransmission(false);          // termina transmissão mas continua com I2C aberto (envia STOP e START)
-    TWire.requestFrom(MPU_ADDR, 1);        // configura para receber 1 byte do registro escolhido acima
-    data = TWire.read();                   // lê o byte e guarda em 'data'
+    TWire->beginTransmission(MPU_ADDR);     // inicia comunicação com endereço do MPU6050
+    TWire->write(reg);                      // envia o registro com o qual se deseja trabalhar
+    TWire->endTransmission(false);          // termina transmissão mas continua com I2C aberto (envia STOP e START)
+    TWire->requestFrom(MPU_ADDR, 1);        // configura para receber 1 byte do registro escolhido acima
+    data = TWire->read();                   // lê o byte e guarda em 'data'
     return data;                          //retorna 'data'
 }
 
 void MPU6050A::findMPU(int mpu_addr) {
-    TWire.beginTransmission(MPU_ADDR);
-    int data = TWire.endTransmission(true);     
+    TWire->beginTransmission(MPU_ADDR);
+    int data = TWire->endTransmission(true);     
     if(data == 0){ found = true; } else { found = false; }
 }
 
@@ -41,7 +42,7 @@ void MPU6050A::setI2C(TwoWire *tw) {
     // Wire.begin();
     // Wire.setClock(400000L);
     //Wire.setClock(100000L);
-    TWire = *tw;
+    TWire = tw;
 }
 
 void MPU6050A::checkMPU() {
@@ -134,34 +135,43 @@ float MPU6050A::readSensor(int id) {
         id = GYRO_XOUT + (id-3)*2;
         scl = gyroscale;
       }
-      TWire.beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
-      TWire.write(id);                         // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
-      TWire.endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
-      TWire.requestFrom(MPU_ADDR,2);           // configura para receber 14 bytes começando do registro escolhido acima (0x3B)    
-      buf[1] = TWire.read();
-      buf[0] = TWire.read();
+      TWire->beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
+      TWire->write(id);                         // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
+      TWire->endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
+      TWire->requestFrom(MPU_ADDR,2);           // configura para receber 2 bytes começando do registro escolhido acima (0x3B)    
+      buf[1] = TWire->read();
+      buf[0] = TWire->read();
       return (float)(*(int16_t *)&buf[0]) * scl;
 }
 
-void MPU6050A::readData() {
-      TWire.beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
-      TWire.write(ACCEL_XOUT);                 // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
-      TWire.endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
-      TWire.requestFrom(MPU_ADDR,14);          // configura para receber 14 bytes começando do registro escolhido acima (0x3B)    
-      buf[0] = 0xF;
-      buf[1] = 0xF;
-      buf[2] = 0xF;
-      buf[3] = TWire.read();
-      buf[4] = TWire.read();
-      buf[5] = TWire.read();
-      buf[6] = TWire.read();
-      buf[7] = TWire.read();
-      buf[8] = TWire.read();
+void MPU6050A::readData(uint8_t *outputpointer) {
+      TWire->beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
+      TWire->write(ACCEL_XOUT);                 // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
+      TWire->endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
+      TWire->requestFrom(MPU_ADDR,14);          // configura para receber 14 bytes começando do registro escolhido acima (0x3B)   
+      // buf[0] = 0xF;
+      // buf[1] = 0xF;
+      // buf[2] = 0xF; 
+      *outputpointer = TWire->read();
+      *(outputpointer+1) = TWire->read();
+      *(outputpointer+2) = TWire->read();
+      *(outputpointer+3) = TWire->read();
+      *(outputpointer+4) = TWire->read();
+      *(outputpointer+5) = TWire->read();
+      outputpointer = outputpointer + 6;
       for (int i = 0; i < 8; i++) {
-        buf[9+i] = TWire.read();
+        *(outputpointer+i) = TWire->read();
       }
-      /*while (TWire.available()) {
-        TWire.read();
+      /*while (TWire->available()) {
+        TWire->read();
       }*/
-      TWire.begin();
+      TWire->begin();
 }  
+
+void MPU6050A::setAddress(int addr) {
+  MPU_ADDR = addr;
+}
+
+int MPU6050A::getAddress() {
+  return MPU_ADDR;
+}
