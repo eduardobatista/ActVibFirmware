@@ -151,7 +151,8 @@ uint8_t cbuf2[20];
 
 uint32_t Tsamplecycles = 1000;  // Sampling period in CPU cycles.
 uint32_t nextperiod = 0;  // Stores the cycle counter value that corresponding to the next system event. Events happen after each sampling period. 
-
+// uint32_t nextTperiod = 0; 
+// uint8_t turbodef = 1; // 0: no turbo; 1: two times; 2: 4 times
 
 /* Write Outputs
     id = 0 -> mcps[0] (12 bits)
@@ -166,6 +167,38 @@ void writeOutput(int id,int val) {
       // Output pins are 25 and 26, for ids equals to 2 and 3 respetively:
       dacWrite(23+id, val & 0xFF);
     }    
+}
+
+
+/* 
+  Receive data regarding the paths via serial port.
+*/
+void getPaths() {     
+  // TODO: Implement TimeOuts to avoid locking     
+  unsigned char * tptr;
+  int nbytes,ct,natual;
+  unsigned char type = Serial.read(); // Tipo de informação a gravar.
+  Serial.readBytes(cbuf,2); //número de bytes a ser lido.
+  nbytes = ((int)cbuf[0] << 8) + (int)cbuf[1];
+  if ((type == 's') || (type == 'f')) {
+    if (type == 's') { 
+      tptr = (unsigned char *) wsec; 
+      Nsec = nbytes >> 2;
+    } else if (type == 'f') {
+      tptr = (unsigned char *) wfbk; 
+      Nfbk = nbytes >> 2;
+    }
+    Serial.write('k');
+    ct = 0;
+    while (ct < nbytes) {
+      if (nbytes-ct-BUF_SIZE >= 0) { natual = BUF_SIZE; } 
+      else { natual = nbytes-ct; }
+      Serial.readBytes((tptr+ct),natual);
+      Serial.write(natual >> 8);
+      Serial.write(natual & 0x00FF);
+      ct = ct + natual;
+    }
+  }
 }
 
 /*
@@ -191,93 +224,14 @@ int8_t flaginitIMU = -1;
 int8_t flagconfigIMU = -1;
 int8_t flagadcconfig = -1;
 int ctt = 0;
+int timecounter;
 // Reading Task
 void Reading(void * parameter){
 
-  int timecounter;
+  // int timecounter;
   int auxxxx = 1;
 
     for (;;) {        
-
-        if (flaginitIMU >= 0) {
-          int IMUid = flaginitIMU;
-            if (imutype[IMUid] == 0 ) {
-              mpus[IMUid].initMPU();
-              mpus[IMUid].readData(cbuf2);
-              mpus[IMUid].checkMPU();
-              // delayMicroseconds(50);
-              if (mpus[IMUid].responseOk) { flaginitIMU = -1; } 
-              else { flaginitIMU = -2;  }
-            } else {
-              // Serial.write(IMUid);
-              status_t aux = lsms[IMUid].begin();
-              if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); } 
-              if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); }         
-              if (aux == IMU_SUCCESS) {
-                // Some readings seems to be need to kick start the automatic readings:
-                lsms[IMUid].readRawAccelX();
-                delay(1);
-                lsms[IMUid].readRawTemp(); 
-                delay(1);
-                flaginitIMU = -1; 
-              } else { flaginitIMU = -2; }            
-            }
-        } 
-        
-        if (flagconfigIMU >= 0) {
-          int IMUid = flagconfigIMU;
-          if (IMUid < 3) {            
-            imuenable[IMUid] = cbuf[0] & 0x01;
-            imutype[IMUid] = (cbuf[0]>>1) & 0x01;
-            imubus[IMUid] = (cbuf[0]>>2) & 0x03;
-            imuaddress[IMUid] = cbuf[1];
-            if (imutype[IMUid] == 0) { // MPU6050
-              if (imubus[IMUid] == 0) { mpus[IMUid].setI2C(&WireA); }
-              else if (imubus[IMUid] == 1) { mpus[IMUid].setI2C(&WireB); }              
-              mpus[IMUid].setAddress(imuaddress[IMUid]);
-              mpus[IMUid].setAccelScale( cbuf[2] & 0x03 );
-              mpus[IMUid].setGyroScale( ((cbuf[2]>>2) & 0x07) - 1 );
-              mpus[IMUid].setFilter( (cbuf[2]>>5) & 0x07 );
-            } else if (imutype[IMUid] == 1) { // LSM6DS3
-              if (imubus[IMUid] < 2) { // I2C buses
-                if (imubus[IMUid] == 0) { lsms[IMUid].setI2CBus(&WireA); }
-                else if (imubus[IMUid] == 1) { lsms[IMUid].setI2CBus(&WireB); }
-                lsms[IMUid].changeI2CAddress(imuaddress[IMUid]);
-              } else { // SPI
-                lsms[IMUid].setSPIMode(imuaddress[IMUid]);
-                
-              }
-              lsms[IMUid].config((cbuf[2]>>2) & 0x07, cbuf[2] & 0x03, (cbuf[2]>>5) & 0x07);
-              lsms[IMUid].readRawAccelX();
-            }
-          }          
-          flagconfigIMU = -1;          
-        }
-
-        if (flagadcconfig >= 0) {   
-          adc.setGain((1 << adcconfig[1]) >> 1);
-          adc.setDataRate(adcconfig[2]);              
-          if (adcconfig[0] > 0) {            
-            adc.setMode(0);   
-            nextadc = 0;
-            do {
-                nextadc = (nextadc+1) & 0x03;
-            } while ( ((adcconfig[0] >> nextadc) & 0x01) == 0 );
-            // adc.requestADC(nextadc); 
-            adc.readADC(nextadc);
-          } else {
-            adc.setMode(1);
-          }
-          for (int iii = 0; iii < 4; iii++) {
-            adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
-          }
-          if (adc.isConnected()) {
-            flagadcconfig = -1;
-          } else {
-            flagadcconfig = -2;
-          }
-        }
-
 
         if (reading) {  // If Reading Mode is on:
 
@@ -285,17 +239,38 @@ void Reading(void * parameter){
             while ( ((nextperiod-ESP.getCycleCount()) >> 31) == 0 ) { auxxxx = auxxxx + 2; }
             nextperiod = nextperiod + Tsamplecycles;
             // --------------------------------------------------------------------------------------------
+
+            // Blocks until reaching the time for next large activity, while dealing with minor activities.
+            // while ( ((nextperiod-ESP.getCycleCount()) >> 31) == 0 ) { 
+
+            //   // Blocks until reaching the time for minor tasks:
+            //   while ( ((nextTperiod-ESP.getCycleCount()) >> 31) == 0 ) { auxxxx = auxxxx + 2; }
+            //   nextTperiod = nextTperiod + (Tsamplecycles >> turbodef);
+            //   // timecounter = ESP.getCycleCount();
+            //   // ADC Reading in turbo mode.
+            //   if (adcconfig[0] > 0) {
+            //     lastadcreadings[nextadc] = adc.getValue();
+            //     lastadc = nextadc;
+            //     do {
+            //       nextadc = (nextadc+1) & 0x03;
+            //     } while ( ((adcconfig[0] >> nextadc) & 0x01) == 0 );
+            //     if (lastadc != nextadc) {
+            //       adc.requestADC(nextadc);
+            //     }
+            //   }
+            //   // timecounter = ESP.getCycleCount() - timecounter;
+              
+            // }
+            // nextperiod = nextperiod + Tsamplecycles;
+            
         
-            timecounter = ESP.getCycleCount();
+            // timecounter = ESP.getCycleCount();
 
             ctt = 0;
             // First 3 bytes for sync:
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
-            // Serial.write(0xF);
-            // Serial.write(0xF);
-            // Serial.write(0xF); 
 
             // IMU Readings:
             for (int id = 0; id < 3; id++) {
@@ -303,15 +278,14 @@ void Reading(void * parameter){
                 if (imutype[id] == 0) {
                     mpus[id].readData(&tdata.data[ctt]);
                     ctt = ctt + 14;
-                    // Serial.write(mpus[id].buf,14); 
                 } else {
                     lsms[id].readRegisterRegion(&tdata.data[ctt],0x22,12);
                     ctt = ctt + 12;
-                    // Serial.write(cbuf2,12);
                 }        
                 }
             }
 
+            timecounter = ESP.getCycleCount();
             // Signal Generators:
             for (int id = 0; id < 4; id++) {
                 if (siggen[id].enabled) { writeOutput(id,siggen[id].next()); }
@@ -319,15 +293,13 @@ void Reading(void * parameter){
                 if (id < 2) {
                   tdata.data[ctt++] = (siggen[id].last >> 8) & 0x0F;
                   tdata.data[ctt++] = siggen[id].last & 0xFF;
-                  // Serial.write((siggen[id].last >> 8) & 0x0F);
-                  // Serial.write(siggen[id].last & 0xFF);
                 } else {
                   tdata.data[ctt++] = siggen[id].last;
-                  // Serial.write(siggen[id].last);  
                 }        
             }
+            timecounter = ESP.getCycleCount() - timecounter;
 
-            // ADC Readings:
+            // Send ADC Readings:
             if (adcconfig[0] > 0) {
 
                 lastadcreadings[nextadc] = adc.getValue();
@@ -346,24 +318,14 @@ void Reading(void * parameter){
                 }
 
             } 
-            //else {
-                // tdata.data[ctt++] = 0;
-                // tdata.data[ctt++] = 0;
-                // Serial.write(0);
-                // Serial.write(0);
-            // }
 
-            timecounter = ESP.getCycleCount() - timecounter;
+            // timecounter = ESP.getCycleCount() - timecounter;
             // Sample Time:
             timecounter = (timecounter >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timecounter >> 8) & 0xFF;
             tdata.data[ctt++] = timecounter & 0xFF;
-            // Serial.write((timecounter >> 8) & 0xFF);
-            // Serial.write(timecounter & 0xFF);
             tdata.nbytes = ctt;
-            // Serial.write(tdata.data,tdata.nbytes);
-            queue.push(tdata);
-        
+            queue.push(tdata);        
 
         } else if (controlling) {  // If Control Mode is on:
 
@@ -427,23 +389,7 @@ void Reading(void * parameter){
             
             // Sending data to the host computer: --------------------------
             // The first three bytes are used for synchronization. 
-            // Syncronization needs to be improved, but it is working fine.
-            // Serial.write(0xF);
-            // Serial.write(0xF);
-            // Serial.write(0xF);
-            // //Serial.write((*siggenperturb).last);
-            // Serial.write(siggen[canalperturb].last >> 8);
-            // Serial.write(siggen[canalperturb].last & 0xFF);
-            // Serial.write(outputaux >> 8);
-            // Serial.write(outputaux & 0xFF);
-            // *(float *) &cbuf[0] = xref;
-            // *(float *) &cbuf[4] = xerr;
-            // Serial.write(&cbuf[0],4);
-            // Serial.write(&cbuf[4],4);    
-            // Serial.write(ctrlflags);
-            // timecounter = (ESP.getCycleCount()-timecounter) >> 4;
-            // Serial.write((timecounter >> 8 & 0xFF));
-            // Serial.write(timecounter & 0xFF);
+            // Syncronization needs to be improved, but it is working fine.            
             ctt = 0;
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
@@ -467,7 +413,89 @@ void Reading(void * parameter){
 
         } else {
 
-          // If not controlling nor reading, delay for a while.
+          // Some tasks that are done only when not controlling nor reading:
+
+          // IMU Initialization:
+          if (flaginitIMU >= 0) { 
+            int IMUid = flaginitIMU;
+              if (imutype[IMUid] == 0 ) {
+                mpus[IMUid].initMPU();
+                mpus[IMUid].readData(cbuf2);
+                mpus[IMUid].checkMPU();
+                if (mpus[IMUid].responseOk) { flaginitIMU = -1; } 
+                else { flaginitIMU = -2;  }
+              } else {
+                status_t aux = lsms[IMUid].begin();
+                if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); } 
+                if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); }         
+                if (aux == IMU_SUCCESS) {
+                  // Some readings seem to be need to kick start the automatic readings:
+                  lsms[IMUid].readRawAccelX();
+                  delay(1);
+                  lsms[IMUid].readRawTemp(); 
+                  delay(1);
+                  flaginitIMU = -1; 
+                } else { flaginitIMU = -2; }            
+              }
+          } 
+          
+          // IMU Configuration:
+          if (flagconfigIMU >= 0) {
+            int IMUid = flagconfigIMU;
+            if (IMUid < 3) {            
+              imuenable[IMUid] = cbuf[0] & 0x01;
+              imutype[IMUid] = (cbuf[0]>>1) & 0x01;
+              imubus[IMUid] = (cbuf[0]>>2) & 0x03;
+              imuaddress[IMUid] = cbuf[1];
+              if (imutype[IMUid] == 0) { // MPU6050
+                if (imubus[IMUid] == 0) { mpus[IMUid].setI2C(&WireA); }
+                else if (imubus[IMUid] == 1) { mpus[IMUid].setI2C(&WireB); }              
+                mpus[IMUid].setAddress(imuaddress[IMUid]);
+                mpus[IMUid].setAccelScale( cbuf[2] & 0x03 );
+                mpus[IMUid].setGyroScale( ((cbuf[2]>>2) & 0x07) - 1 );
+                mpus[IMUid].setFilter( (cbuf[2]>>5) & 0x07 );
+              } else if (imutype[IMUid] == 1) { // LSM6DS3
+                if (imubus[IMUid] < 2) { // I2C buses
+                  if (imubus[IMUid] == 0) { lsms[IMUid].setI2CBus(&WireA); }
+                  else if (imubus[IMUid] == 1) { lsms[IMUid].setI2CBus(&WireB); }
+                  lsms[IMUid].changeI2CAddress(imuaddress[IMUid]);
+                } else { // SPI
+                  lsms[IMUid].setSPIMode(imuaddress[IMUid]);
+                  
+                }
+                lsms[IMUid].config((cbuf[2]>>2) & 0x07, cbuf[2] & 0x03, (cbuf[2]>>5) & 0x07);
+                lsms[IMUid].readRawAccelX();
+              }
+            }          
+            flagconfigIMU = -1;          
+          }
+
+          // ADC Configuration:
+          if (flagadcconfig >= 0) {   
+            adc.setGain((1 << adcconfig[1]) >> 1);
+            adc.setDataRate(adcconfig[2]);              
+            if (adcconfig[0] > 0) {            
+              adc.setMode(0);   
+              nextadc = 0;
+              do {
+                  nextadc = (nextadc+1) & 0x03;
+              } while ( ((adcconfig[0] >> nextadc) & 0x01) == 0 );
+              // adc.requestADC(nextadc); 
+              adc.readADC(nextadc);
+            } else {
+              adc.setMode(1);
+            }
+            for (int iii = 0; iii < 4; iii++) {
+              adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
+            }
+            if (adc.isConnected()) {
+              flagadcconfig = -1;
+            } else {
+              flagadcconfig = -2;
+            }
+          }
+
+          // If not controlling nor reading, one can delay for a while:
           delay(1);
 
         }
@@ -475,6 +503,8 @@ void Reading(void * parameter){
     }
 
 }
+
+
 
 void Writing(void * parameter){
 
@@ -499,269 +529,291 @@ void Writing(void * parameter){
         Now, dealing with commmands from the computer host:
       */
       if ((hascmd == 0) && (Serial.available() > 0) ) {
+
         sr = Serial.read();
-        if (sr == 'h') { // Handshake
-          if (!reading && !controlling) { Serial.write('k'); }
-        } 
-        else if ((sr == 's') && !controlling) { // Starts reading mode.
-          nextperiod = ESP.getCycleCount();
-          reading = true;
-          controlling = false;
-        } 
-        else if ((sr == 'S') && !reading) { // Starts control mode.    
-          dcr[0].reset();
-          dcr[1].reset();
-          if (algchoice == 0) { fxnlms.reset(); }
-          else if (algchoice == 2) { tafxnlms.reset(); }
-          filtsec.reset();
-          filtsec2.reset();
-          filtfbk.reset();
-          lastout = 0;
-          // TODO: check the following
-          dclevel = siggen[canalcontrole].Z_LEVEL;
-          satlevel = dclevel * 2 - 1;
-          outputaux = dclevel;
-          nextperiod = ESP.getCycleCount();
-          controlling = true;
-          reading = false;
-        }
-        else if (sr == 't') { // Stops either reading or control mode.
-          reading = false; 
-          controlling = false;
-        } 
-        else if (sr == '!') { // Reads configuration data (treated afterwards).
-          hascmd = '!';
-        }
-        else if (sr == 'a') { // AlgOn (treated afterwards).
-          hascmd = 'a';
-        }
-        else if (sr == 'd') { // AlgOn (treated afterwards).
-          hascmd = 'd';
-        } 
-        else if (sr == 'I') { // NEW! IMU config (treated afterwards).
-          hascmd = 'I';
-        }
-        else if (sr == 'G') { // Generator settings.
-          hascmd = 'G';
-        }
-        else if (sr == 'W') { // Grava caminho secundário ou de feedback
-          if (!reading && !controlling) { hascmd = 'W'; }
-        }
-        else if (sr == 'P') { // Grava na memória não volátil os caminhos secundário e de feedback
-          if (!reading && !controlling) {
-            prefs.begin("AlgData");
-            prefs.putInt("AlgData",Nsec);
-            prefs.putInt("AlgData",Nfbk);
-            prefs.putBytes("AlgData",&wsec[0],Nsec*sizeof(float));
-            prefs.putBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
-            prefs.end();
-            Serial.print("ok!");
-          }     
-        } else if (sr == 'i') { // inicializa sensor escolhido
-          if ((!reading) && (!controlling)){ 
-            flaginitIMU = Serial.read();
-            while (flaginitIMU >= 0) {
-              delay(1);
+
+        switch (sr) {
+
+          case 'h':
+            if (!reading && !controlling) { Serial.write('k'); }
+            break;
+
+          case 's':
+            if (!controlling) {
+              nextperiod = ESP.getCycleCount() + Tsamplecycles;
+              // nextTperiod = ESP.getCycleCount() + (Tsamplecycles >> turbodef);
+              reading = true;
+              controlling = false;
+            }            
+            break;
+
+          case 'S': 
+            if (!reading) {
+              dcr[0].reset();
+              dcr[1].reset();
+              if (algchoice == 0) { fxnlms.reset(); }
+              else if (algchoice == 2) { tafxnlms.reset(); }
+              filtsec.reset();
+              filtsec2.reset();
+              filtfbk.reset();
+              lastout = 0;
+              // TODO: check the following
+              dclevel = siggen[canalcontrole].Z_LEVEL;
+              satlevel = dclevel * 2 - 1;
+              outputaux = dclevel;
+              nextperiod = ESP.getCycleCount() + Tsamplecycles;
+              // nextTperiod = ESP.getCycleCount() + (Tsamplecycles >> turbodef);
+              controlling = true;
+              reading = false;
             }
-            if (flaginitIMU == -1) { Serial.write("ok!"); } 
-            else { Serial.write("err"); }               
-          }      
-        }
-        else if (sr == 'X') { // usado para teste do algoritmo adaptativo
-          unsigned char aux[4];
-          aux[0] = Serial.read();
-          aux[1] = Serial.read();
-          aux[2] = Serial.read();
-          aux[3] = Serial.read();
-          float xn = *(float *) aux;
-          aux[0] = Serial.read();
-          aux[1] = Serial.read();
-          aux[2] = Serial.read();
-          aux[3] = Serial.read();
-          float dn = *(float *) aux;
-          float en = 0;
-          //en = dn - fxnlms.filter(xn);
-          //fxnlms.update(en);
-          if (!isnan(xn) && !isnan(dn)) {
-            Serial.write('k');
-            en = dn - filtsec.filter(fxnlms.filter(xn));
-            fxnlms.update(en);   
-            *(float *) aux = en; 
-            Serial.write(aux,4);     
-          } else {
-            //Serial.write('!');
-            //en = dn - fxnlms.filter(0);
-            //fxnlms.update(0);
-          }      
-        }
-        else if (sr == 'r') {
-          lsms[0].setI2CBus(&WireA);
-          lsms[0].changeI2CAddress(0x6B);
-          for (int tt = 0; tt < 3; tt++) {
-            lsms[0].begin();
-            delay(2);
-          }
-          uint8_t readCheck;
-          lsms[0].readRegister(&readCheck, LSM6DS3_ACC_GYRO_WHO_AM_I_REG);
-          Serial.println(readCheck);
-          Serial.println(lsms[0].commInterface);
-          Serial.println(lsms[0].readFloatAccelX());
-          Serial.println(lsms[0].readRawTemp());
-          Serial.println(lsms[1].commInterface);
-          Serial.println(lsms[2].commInterface);
+            break;
+
+
+          case 't':
+            reading = false; 
+            controlling = false;
+            break;
+
+
+          case 'P':
+            if (!reading && !controlling) {
+              prefs.begin("AlgData");
+              prefs.putInt("AlgData",Nsec);
+              prefs.putInt("AlgData",Nfbk);
+              prefs.putBytes("AlgData",&wsec[0],Nsec*sizeof(float));
+              prefs.putBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
+              prefs.end();
+              Serial.print("ok!");
+            }
+            break;
+
+          case 'i':
+            if ((!reading) && (!controlling)){ 
+              flaginitIMU = Serial.read();
+              while (flaginitIMU >= 0) { 
+                delay(1);
+              }
+              if (flaginitIMU == -1) { Serial.write("ok!"); } 
+              else { Serial.write("err"); }               
+            }   
+            break;
+
+          
+          case '!':
+            hascmd = '!';
+            break;
+
+          
+          case 'a':
+            hascmd = 'a';
+            break;
+
+
+          case 'd':
+            hascmd = 'd';
+            break;
+
+
+          case 'I':
+            hascmd = 'I';
+            break;
+
+
+          case 'G':
+            hascmd = 'G';
+            break; 
+
+
+          case 'W':
+            if (!reading && !controlling) { getPaths(); }
+            break;
+
+
+          case 'X':
+            // unsigned char aux[4];
+            // aux[0] = Serial.read();
+            // aux[1] = Serial.read();
+            // aux[2] = Serial.read();
+            // aux[3] = Serial.read();
+            // float xn = *(float *) aux;
+            // aux[0] = Serial.read();
+            // aux[1] = Serial.read();
+            // aux[2] = Serial.read();
+            // aux[3] = Serial.read();
+            // float dn = *(float *) aux;
+            // float en = 0;
+            // //en = dn - fxnlms.filter(xn);
+            // //fxnlms.update(en);
+            // if (!isnan(xn) && !isnan(dn)) {
+            //   Serial.write('k');
+            //   en = dn - filtsec.filter(fxnlms.filter(xn));
+            //   fxnlms.update(en);   
+            //   *(float *) aux = en; 
+            //   Serial.write(aux,4);     
+            // } else {
+            //   //Serial.write('!');
+            //   //en = dn - fxnlms.filter(0);
+            //   //fxnlms.update(0);
+            // }
+            break;
+
+          case 'r':
+            lsms[0].setI2CBus(&WireA);
+            lsms[0].changeI2CAddress(0x6B);
+            for (int tt = 0; tt < 3; tt++) {
+              lsms[0].begin();
+              delay(2);
+            }
+            uint8_t readCheck;
+            lsms[0].readRegister(&readCheck, LSM6DS3_ACC_GYRO_WHO_AM_I_REG);
+            Serial.println(readCheck);
+            Serial.println(lsms[0].commInterface);
+            Serial.println(lsms[0].readFloatAccelX());
+            Serial.println(lsms[0].readRawTemp());
+            Serial.println(lsms[1].commInterface);
+            Serial.println(lsms[2].commInterface);
+            break;          
+
         }
         
       }
 
 
       if (hascmd != 0) { // Late treatment of several commands.
+
         cthascmd++;
         delayMicroseconds(20);
         if (cthascmd > 100) {
           cthascmd = 0;
           hascmd = 0;
         } 
-        else if (hascmd == 'I') { // NEW! IMU configuration.
-          if (Serial.available() >= 4) {
-            unsigned int IMUid = Serial.read();
-            Serial.readBytes(cbuf,3);
-            flagconfigIMU = IMUid;
-            while (flagconfigIMU >= 0) {
-              delay(1);
+
+        switch(hascmd) {
+
+          case 'I':
+            if (Serial.available() >= 4) {
+              unsigned int IMUid = Serial.read();
+              Serial.readBytes(cbuf,3);
+              flagconfigIMU = IMUid;
+              while (flagconfigIMU >= 0) {
+                delay(1);
+              }
+              Serial.write("ok");            
+              hascmd = 0;
+              cthascmd = 0;
             }
-            Serial.write("ok");            
-            hascmd = 0;
-            cthascmd = 0;
-          }
-        }       
-        else if (hascmd == 'G') {
-          if (Serial.available() >= 8) { // If command is G, check if five bytes are available. If they are not, try again at the next cycle.
-            unsigned int idgerador = Serial.read();  
-            unsigned int tipo = Serial.read();
-            float amp = (float)((Serial.read() << 8) + Serial.read());
-            float freq = (float)Serial.read();          
-            freq = freq + ((float)Serial.read())/100.0;
-            int dclevel = (Serial.read() << 8) + Serial.read();
-            if (idgerador < 4) {
-              siggen[idgerador].setType(tipo,amp,freq,dclevel);
-              if (tipo == 2) {
-                siggen[idgerador].setChirpParams(Serial.read(),Serial.read(),Serial.read(),
-                                                Serial.read(),(Serial.read() << 8) + Serial.read());
+            break;
+
+
+          case 'G':
+            if (Serial.available() >= 8) { // If command is G, check if five bytes are available. If they are not, try again at the next cycle.
+              unsigned int idgerador = Serial.read();  
+              unsigned int tipo = Serial.read();
+              float amp = (float)((Serial.read() << 8) + Serial.read());
+              float freq = (float)Serial.read();          
+              freq = freq + ((float)Serial.read())/100.0;
+              int dclevel = (Serial.read() << 8) + Serial.read();
+              if (idgerador < 4) {
+                siggen[idgerador].setType(tipo,amp,freq,dclevel);
+                if (tipo == 2) {
+                  siggen[idgerador].setChirpParams(Serial.read(),Serial.read(),Serial.read(),
+                                                  Serial.read(),(Serial.read() << 8) + Serial.read());
+                }
+              }
+              hascmd = 0;
+              cthascmd = 0;
+            }
+            break;
+
+
+          case 'd':
+            if (Serial.available() >= 3) {  // If command is d, check if one byte is avaliable from the host computer. If it is not, try again at the next cycle.
+              adcconfig[0] = Serial.read();
+              adcconfig[1] = Serial.read();
+              adcconfig[2] = Serial.read();  
+              flagadcconfig = 1;
+              while (flagadcconfig >= 0) { 
+                // TODO: prevent blocking forever.
+                delay(1);
+              }
+              if (flagadcconfig == -1) {
+                Serial.write("ok");
+              } else {
+                Serial.write("er");
+              }
+              flagadcconfig = -1;            
+              hascmd = 0;
+              cthascmd = 0;  
+            }
+            break;
+
+
+          case 'a':
+            if (Serial.available() >= 1) {  // If command is A, check if one byte is avaliable from the host computer. If it is not, try again at the next cycle.
+              hascmd = 0;
+              cthascmd = 0;
+              unsigned char aux = Serial.read();
+              if (aux == 0) { // Desativa
+                algOn = false;
+              } else if (aux == 1) { // Ativa
+                algOn = true;
+              } else if (aux == 2) { // Ativa com mudança de parâmetros
+                hascmd = 'A';
               }
             }
-            hascmd = 0;
-            cthascmd = 0;
-          }            
-        }
-        else if (hascmd == 'd') {
-          if (Serial.available() >= 3) {  // If command is d, check if one byte is avaliable from the host computer. If it is not, try again at the next cycle.
-            adcconfig[0] = Serial.read();
-            adcconfig[1] = Serial.read();
-            adcconfig[2] = Serial.read();  
-            flagadcconfig = 1;
-            while (flagadcconfig >= 0) { 
-              // TODO: prevent blocking forever.
-              delay(1);
-            }
-            if (flagadcconfig == -1) {
-              Serial.write("ok");
-            } else {
-              Serial.write("er");
-            }
-            flagadcconfig = -1;            
-            hascmd = 0;
-            cthascmd = 0;  
-          }
-        }
-        else if (hascmd == 'a') {
-          if (Serial.available() >= 1) {  // If command is A, check if one byte is avaliable from the host computer. If it is not, try again at the next cycle.
-            hascmd = 0;
-            cthascmd = 0;
-            unsigned char aux = Serial.read();
-            if (aux == 0) { // Desativa
-              algOn = false;
-            } else if (aux == 1) { // Ativa
+            break;
+
+
+          case 'A':  // Extra tasks from command 'a'
+            if (Serial.available() >= 8) {  // Eight bytes are available? If not, does not block and try again in the next cycle.
+              hascmd = 0;
+              cthascmd = 0;
+              Serial.readBytes(cbuf,8);
+              if (algchoice == 0) { // FxNLMS
+                fxnlms.mu = *(float *) &cbuf[0];
+                fxnlms.fi = *(float *) &cbuf[4];
+              } else if (algchoice == 2) { // TAFxNLMS
+                tafxnlms.mu = *(float *) &cbuf[0];
+                tafxnlms.fi = *(float *) &cbuf[4];
+              }
               algOn = true;
-            } else if (aux == 2) { // Ativa com mudança de parâmetros
-              hascmd = 'A';
             }
-          }
-        }
-        else if (hascmd == 'A') {
-          if (Serial.available() >= 8) {  // Eight bytes are available? If not, does not block and try again in the next cycle.
-            hascmd = 0;
-            cthascmd = 0;
-            Serial.readBytes(cbuf,8);
-            if (algchoice == 0) { // FxNLMS
-              fxnlms.mu = *(float *) &cbuf[0];
-              fxnlms.fi = *(float *) &cbuf[4];
-            } else if (algchoice == 2) { // TAFxNLMS
-              tafxnlms.mu = *(float *) &cbuf[0];
-              tafxnlms.fi = *(float *) &cbuf[4];
-            }
-            algOn = true;
-          }
-        }
-        else if (hascmd == 'W') {
-          if (Serial.available() > 0) {        
-            unsigned char * tptr;
-            int nbytes,ct,natual;
-            unsigned char type = Serial.read(); // Tipo de informação a gravar.
-            Serial.readBytes(cbuf,2); //número de bytes a ser lido.
-            nbytes = ((int)cbuf[0] << 8) + (int)cbuf[1];
-            if ((type == 's') || (type == 'f')) {
-              if (type == 's') { 
-                tptr = (unsigned char *) wsec; 
-                Nsec = nbytes >> 2;
-              } else if (type == 'f') {
-                tptr = (unsigned char *) wfbk; 
-                Nfbk = nbytes >> 2;
+            break;
+
+
+          case '!':
+            if (Serial.available() >= 14) {
+              Serial.readBytes(cbuf,14);          
+              canalcontrole = cbuf[0] & 0x0F;
+              canalperturb = (cbuf[0] >> 4) & 0x0F;
+              idRefIMU = (cbuf[1] >> 4) & 0x0F;
+              idRefIMUSensor = (cbuf[1] & 0x0F);
+              idErrIMU = (cbuf[2] >> 4) & 0x0F;
+              idErrIMUSensor = (cbuf[2] & 0x0F);
+              algchoice = cbuf[3];
+              if (algchoice == 0) { // FxNLMS
+                fxnlms.setParameters(
+                  (((int)cbuf[4]) << 8) + (int)cbuf[5],
+                  *(float *) &cbuf[6],
+                  *(float *) &cbuf[10]
+                );
+              } else if (algchoice == 2) { // TAFxNLMS
+                tafxnlms.setParameters(
+                  (((int)cbuf[4]) << 8) + (int)cbuf[5],
+                  *(float *) &cbuf[6],
+                  *(float *) &cbuf[10]
+                );
               }
-              Serial.write('k');
-              ct = 0;
-              while (ct < nbytes) {
-                if (nbytes-ct-BUF_SIZE >= 0) { natual = BUF_SIZE; } 
-                else { natual = nbytes-ct; }
-                Serial.readBytes((tptr+ct),natual);
-                Serial.write(natual >> 8);
-                Serial.write(natual & 0x00FF);
-                ct = ct + natual;
-              }
-            }       
-            hascmd = 0;
-            cthascmd = 0;
-          }
-        }
-        else if (hascmd == '!') {
-          if (Serial.available() >= 14) {
-            Serial.readBytes(cbuf,14);          
-            canalcontrole = cbuf[0] & 0x0F;
-            canalperturb = (cbuf[0] >> 4) & 0x0F;
-            idRefIMU = (cbuf[1] >> 4) & 0x0F;
-            idRefIMUSensor = (cbuf[1] & 0x0F);
-            idErrIMU = (cbuf[2] >> 4) & 0x0F;
-            idErrIMUSensor = (cbuf[2] & 0x0F);
-            algchoice = cbuf[3];
-            if (algchoice == 0) { // FxNLMS
-              fxnlms.setParameters(
-                (((int)cbuf[4]) << 8) + (int)cbuf[5],
-                *(float *) &cbuf[6],
-                *(float *) &cbuf[10]
-              );
-            } else if (algchoice == 2) { // TAFxNLMS
-              tafxnlms.setParameters(
-                (((int)cbuf[4]) << 8) + (int)cbuf[5],
-                *(float *) &cbuf[6],
-                *(float *) &cbuf[10]
-              );
+              delayMicroseconds(100);
+              Serial.print("ok!");
+              algOn = false;
+              hascmd = 0;
+              cthascmd = 0;
             }
-            delayMicroseconds(100);
-            Serial.print("ok!");
-            algOn = false;
-            hascmd = 0;
-            cthascmd = 0;
-          }
+            break;
+
         }
+    
       }
 
     }
@@ -786,13 +838,13 @@ void setup() {
   WireA.setClock(1000000L);
   WireB.begin(13,14,1000000L); // Test: GPIO14 as SCL and GPIO13 as SDA 
  
-  mpus[0].setI2C(&WireA);
-  mpus[0].initMPU();
-  mpus[0].checkMPU();
+  // mpus[0].setI2C(&WireA);
+  // mpus[0].initMPU();
+  // mpus[0].checkMPU();
 
-  mpus[1].setI2C(&WireB);
-  mpus[1].initMPU();
-  mpus[1].checkMPU();
+  // mpus[1].setI2C(&WireB);
+  // mpus[1].initMPU();
+  // mpus[1].checkMPU();
 
   mcps[0].begin();
   mcps[1].begin();
@@ -806,8 +858,7 @@ void setup() {
   loadFlashData();
 
   Tsamplecycles = T_SAMPLE_us * ESP.getCpuFreqMHz(); // Sampling period in clock cycles 
-  nextperiod = ESP.getCycleCount();
-
+  
     // Inicialização Core 0 (Leitura)
     xTaskCreatePinnedToCore(
         Reading,            /* Task function          */
@@ -833,7 +884,8 @@ void setup() {
     delay(500); 
      
 
-    nextperiod = ESP.getCycleCount();
+    nextperiod = 0;
+    // nextTperiod = 0;
   
 }
 
@@ -841,6 +893,6 @@ void loop() {
 
     // delay(100);
     vTaskDelay(100);
-    // vTaskSuspend(NULL);
+    vTaskSuspend(NULL);
 
 }
