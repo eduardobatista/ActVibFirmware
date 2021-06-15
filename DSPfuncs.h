@@ -14,7 +14,9 @@
     class SignalGenerator {
 
         private:
+            float BASE_F_SAMPLE;
             float F_SAMPLE;
+            float BASE_T_SAMPLE;
             float T_SAMPLE;            
             int STD_Z_LEVEL;
             float levelscaler;
@@ -42,7 +44,7 @@
             bool enabled;
             int Z_LEVEL;
             SignalGenerator(float fsampling, float tsampling, int stdzlevel);
-            void setType(int tp, float Amp, float freq, int dclevel);
+            void setType(int tp, float Amp, float freq, int dclevel, float freqmult);
             void setChirpParams(int ti, int di, int tf, int df, int a2);
             int next();
             

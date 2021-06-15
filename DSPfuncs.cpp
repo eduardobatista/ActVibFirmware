@@ -30,7 +30,9 @@ float DCRemover::filter(float x) {
 
 SignalGenerator::SignalGenerator(float fsampling, float tsampling, int stdzlevel) {
     F_SAMPLE = fsampling;
+    BASE_F_SAMPLE = fsampling;
     T_SAMPLE = tsampling;
+    BASE_T_SAMPLE = tsampling;
     Z_LEVEL = stdzlevel;
     STD_Z_LEVEL = stdzlevel;
     levelscaler = 1;
@@ -55,7 +57,9 @@ SignalGenerator::SignalGenerator(float fsampling, float tsampling, int stdzlevel
     enabled = false;
 }
 
-void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel) {
+void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel, float freqmult) {
+    F_SAMPLE = freqmult * BASE_F_SAMPLE;
+    T_SAMPLE = BASE_T_SAMPLE / freqmult;
     type = tp;
     Z_LEVEL = dclevel;
     levelscaler = ((float)dclevel) / ((float)STD_Z_LEVEL);
