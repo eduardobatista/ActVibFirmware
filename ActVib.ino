@@ -49,6 +49,8 @@ int num = 20;
 // Queue<sensorsData> queue = Queue<sensorsData>(num); // Queue of max num 'sensorsData', where 'sensorsData' is a struct
 Queue<transmitData> queue = Queue<transmitData>(num);
 
+Queue<float> controlqueue = Queue<float>(2);
+
 
 // Timing variables: -----------------------------------------------------------------------------
 const float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
@@ -263,16 +265,13 @@ void loadFlashData() {
   filtfbk.setMem(Nfbk);
   Serial.println("Flash data loaded...");
 }
-
-uint8_t errorflags;  // Errors: None | None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout    
+  
 int8_t flaginitIMU = -1;
 volatile uint32_t timecounter2,timecounter2aux;
 // Reading Task
 void Reading(void * parameter){
 
-  uint32_t auxxxx = 0;
-  uint32_t ulNotifiedValue;
-  BaseType_t retnotify = pdFALSE;
+  uint32_t auxxxx = 0;  
   transmitData tdata;
   int ctt = 0;
   uint32_t timecounter1,timecounter1aux;
@@ -281,9 +280,129 @@ void Reading(void * parameter){
 
         if (reading) {  // If Reading Mode is on:
 
+          vTaskDelayUntil(&xLastWakeTime1,xFrequency1);           
+
+            // timecounter2 = ESP.getCycleCount() - timecounter2aux;
+            // timecounter2aux = ESP.getCycleCount();
+            timecounter2 = ESP.getCycleCount();
+
+            // Reading IMUS in the main I2C Bus:
+            for (int id = 0; id < 3; id++) {
+                if (imuenable[id] == 1) {  
+                  if (imubus[id] == 0) {
+                    if (imutype[id] == 0) {
+                      mpus[id].readData(&lastimureadings[id][0]);
+                    } else {
+                      lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
+                    }
+                  }                        
+                }
+            }
+
+            // Generator outputs:
+            for (int id = 0; id < 4; id++) {
+                if (siggen[id].enabled) { writeOutput(id,siggen[id].next()); }
+                else { writeOutput(id,0); }
+            }
+
+            // ADC readings:
+            if ((adcconfig[0] & 0x0F) > 0) {
+              
+              if (adcreadings.count() == 0) { nextadc = 0; }
+              
+              if (adcreadings.count() < 4) {
+                adcreadings.push(adc->getValue());
+                nextadc = (nextadc+1) & 0x03;
+                adc->requestADC(adcseq[nextadc]); 
+              }
+
+            }
+
+            timecounter2 = ESP.getCycleCount() - timecounter2;
+
+            // xTaskNotifyGive(writing1);
+            xTaskNotify(writing1, 0, eNoAction);
+
+            
+        } else if (controlling) {  // If Control Mode is on:
+
+            // Blocks until reaching the time for next sample: --------------------------------------------
+            vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
+            // --------------------------------------------------------------------------------------------
+
+            timecounter2 = ESP.getCycleCount(); 
+            
+            controlqueue.clear();
+
+            // TODO: Move to the other process?:
+            writeOutput(canalperturb,siggen[canalperturb].next());
+            writeOutput(canalcontrole,outputaux);
+
+            if (imubus[idRefIMU] == 0) {
+              if (imutype[idRefIMU] == 0) {
+                controlqueue.push(dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor)));
+              } else {
+                controlqueue.push(dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor)));
+              }
+            }
+            if (imubus[idErrIMU] == 0) {
+              if (imutype[idErrIMU] == 0) {
+                controlqueue.push(dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor)));
+              } else {
+                controlqueue.push(dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor)));
+              }
+            }
+
+            xTaskNotify(writing1, 0, eNoAction);
+
+            timecounter2 = ESP.getCycleCount() - timecounter2;
+
+        } else {
+
+          // Some tasks that are done only when not controlling nor reading:
+
+          // IMU Initialization:
+          if (flaginitIMU >= 0) { 
+            flaginitIMU = initIMU(flaginitIMU);
+          }           
+
+          // If not controlling nor reading, one can delay for a while:
+          delay(1);
+
+        }
+
+    }
+
+}
+
+
+void Writing(void * parameter){
+
+  uint8_t sr = 0;  // Stores commands read from the computer host.
+  char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
+  int cthascmd = 0;  // Indicates if the cmd has been treated. TODO: check if it is important or not, maybe could be changed to a flag. 
+  uint8_t ctcycle = 0;
+  uint8_t imuidd;
+
+  uint32_t auxxxx = 0;
+  transmitData tdata;
+  int ctt = 0;
+  uint32_t timecounter1,timecounter1aux;
+
+  uint8_t errorflags;  // Errors: None | None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout  
+
+  uint32_t ulNotifiedValue;
+  BaseType_t retnotify = pdFALSE;
+
+    for (;;) {
+
+      if (reading) {
+
             // Blocks until reaching the next sampling period: --------------------------------------------    
             vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
-            // --------------------------------------------------------------------------------------------    
+            // -------------------------------------------------------------------------------------------- 
+            xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
+            tdata.nbytes = 0;  
             errorflags = 0;
 
             // timecounter1 = ESP.getCycleCount() - timecounter1aux;
@@ -312,8 +431,9 @@ void Reading(void * parameter){
             }
 
             // Read semaphore and clear (max wait time is 1 ms):
-            // auxxxx = ulTaskNotifyTake(pdFALSE,(TickType_t)1);            
-            retnotify = xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+            // auxxxx = ulTaskNotifyTake(pdFALSE,(TickType_t)1);    
+            // if (auxxxx == 0) { errorflags = errorflags | 0x01; }        
+            retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
             if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
 
             ctt = 3;
@@ -370,175 +490,115 @@ void Reading(void * parameter){
             tdata.data[ctt++] = timecounter2 & 0xFF;
             tdata.data[ctt++] = errorflags;
             tdata.nbytes = ctt;
-            queue.push(tdata); 
-     
-
-        } else if (controlling) {  // If Control Mode is on:
-
-            // Blocks until reaching the time for next sample: --------------------------------------------
-            vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
-            // --------------------------------------------------------------------------------------------
-
-            timecounter1 = ESP.getCycleCount(); 
-            
-            // TODO: Move to the other process?:
-            writeOutput(canalperturb,siggen[canalperturb].next());
-            writeOutput(canalcontrole,outputaux);
-
-            if (imutype[idRefIMU] == 0) {
-                xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
-            } else {
-                xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
-            }
-            if (imutype[idErrIMU] == 0) {
-                xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
-            } else {
-                xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
-            }
-
-            if (algOn) { 
-                if (algchoice == 0) {
-                fxnlms.update(xerr);        
-                } else if (algchoice == 2) {
-                tafxnlms.update(xerr);
-                }
-            }
-            
-            xreff = xref - filtfbk.filter(lastout);
-            
-            // if (algchoice == 0) {
-            //   fxnlms.filter(xreff);
-            //   lastout = fxnlms.y;
-            // } else if (algchoice == 2) {
-            //   tafxnlms.filter(xreff,filtfbk.y);
-            //   lastout = tafxnlms.y;
-            // } 
-            if (algOn) { 
-                if (algchoice == 0) {
-                fxnlms.filter(xreff);
-                lastout = fxnlms.y;
-                } else if (algchoice == 2) {
-                tafxnlms.filter(xreff,filtfbk.y);
-                lastout = tafxnlms.y;
-                } 
-                outputaux = dclevel - ((int)round(lastout));
-                if (outputaux > satlevel) { outputaux = satlevel; ctrlflags = 1; }
-                else if (outputaux < 0) { outputaux = 0; ctrlflags = 1; }
-                else { ctrlflags = 0; } 
-            } else {
-                outputaux = dclevel;
-                ctrlflags = 0;
-            }
-
-            // writeOutput(canalperturb,siggen[canalperturb].next());
-            // writeOutput(canalcontrole,outputaux);
-            
-            // Sending data to the host computer: --------------------------
-            // The first three bytes are used for synchronization. 
-            // Syncronization needs to be improved, but it is working fine.            
-            ctt = 0;
-            tdata.data[ctt++] = 0xF;
-            tdata.data[ctt++] = 0xF;
-            tdata.data[ctt++] = 0xF;
-            tdata.data[ctt++] = siggen[canalperturb].last >> 8;
-            tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
-            tdata.data[ctt++] = outputaux >> 8;
-            tdata.data[ctt++] = outputaux & 0xFF;
-            *(float *) &tdata.data[ctt] = xref;
-            ctt = ctt + 4;
-            *(float *) &tdata.data[ctt] = xerr;
-            ctt = ctt + 4;
-            tdata.data[ctt++] = ctrlflags;
-            timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
-            tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
-            tdata.data[ctt++] = timecounter1 & 0xFF;
-            tdata.nbytes = ctt;
-
-            queue.push(tdata);
-            // --------------------------------------------------------------
-
-        } else {
-
-          // Some tasks that are done only when not controlling nor reading:
-
-          // IMU Initialization:
-          if (flaginitIMU >= 0) { 
-            flaginitIMU = initIMU(flaginitIMU);
-          }           
-
-          // If not controlling nor reading, one can delay for a while:
-          delay(1);
-
-        }
-
-    }
-
-}
-
-
-void Writing(void * parameter){
-
-  transmitData wdata;
-  uint8_t sr = 0;  // Stores commands read from the computer host.
-  char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
-  int cthascmd = 0;  // Indicates if the cmd has been treated. TODO: check if it is important or not, maybe could be changed to a flag. 
-  uint8_t ctcycle = 0;
-  uint8_t imuidd;
-
-  int auxxxx = 1;
-
-    for (;;) {
-
-      if (reading) {
-
-            vTaskDelayUntil(&xLastWakeTime1,xFrequency1);           
-
-            // timecounter2 = ESP.getCycleCount() - timecounter2aux;
-            // timecounter2aux = ESP.getCycleCount();
-            timecounter2 = ESP.getCycleCount();
-
-            // Reading IMUS in the main I2C Bus:
-            for (int id = 0; id < 3; id++) {
-                if (imuenable[id] == 1) {  
-                  if (imubus[id] == 0) {
-                    if (imutype[id] == 0) {
-                      mpus[id].readData(&lastimureadings[id][0]);
-                    } else {
-                      lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
-                    }
-                  }                        
-                }
-            }
-
-            // Generator outputs:
-            for (int id = 0; id < 4; id++) {
-                if (siggen[id].enabled) { writeOutput(id,siggen[id].next()); }
-                else { writeOutput(id,0); }
-            }
-
-            // ADC readings:
-            if ((adcconfig[0] & 0x0F) > 0) {
-              
-              if (adcreadings.count() == 0) { nextadc = 0; }
-              
-              if (adcreadings.count() < 4) {
-                adcreadings.push(adc->getValue());
-                nextadc = (nextadc+1) & 0x03;
-                adc->requestADC(adcseq[nextadc]); 
-              }
-
-            }
-
-            timecounter2 = ESP.getCycleCount() - timecounter2;
-
-            // xTaskNotifyGive(reading1);
-            if (ctcycle == 3) { xTaskNotify(reading1, 0, eNoAction); }  
-            ctcycle = (ctcycle + 1) & 0x03;
 
 
       } else if (controlling) {
 
-        // TODO: Just do it!
+          // Blocks until reaching the time for next sample: --------------------------------------------
+          vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
+          // --------------------------------------------------------------------------------------------
+          xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
+          errorflags = 0;
+
+          timecounter1 = ESP.getCycleCount();
+
+          if (imubus[idRefIMU] != 0) {
+            if (imutype[idRefIMU] == 0) {
+              xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
+            } else {
+              xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
+            }
+          }
+          if (imubus[idErrIMU] != 0) {
+            if (imutype[idErrIMU] == 0) {
+              xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
+            } else {
+              xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
+            }            
+          }
+
+          retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+          if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+
+          if (imubus[idRefIMU] == 0) {
+            if (controlqueue.count() == 0) { 
+              errorflags = errorflags | 0x08;
+              xref = 0;
+            } else {
+              xref = controlqueue.pop();
+            }            
+          } 
+          if (imubus[idErrIMU] == 0) {
+            if (controlqueue.count() == 0) { 
+              errorflags = errorflags | 0x10;
+              xerr = 0;
+            } else {
+              xerr = controlqueue.pop();
+            }          
+          } 
+
+
+          if (algOn) { 
+            if (algchoice == 0) {
+              fxnlms.update(xerr);        
+            } else if (algchoice == 2) {
+              tafxnlms.update(xerr);
+            }
+          }
+          
+          xreff = xref - filtfbk.filter(lastout);
+          
+          // if (algchoice == 0) {
+          //   fxnlms.filter(xreff);
+          //   lastout = fxnlms.y;
+          // } else if (algchoice == 2) {
+          //   tafxnlms.filter(xreff,filtfbk.y);
+          //   lastout = tafxnlms.y;
+          // } 
+          if (algOn) { 
+              if (algchoice == 0) {
+                fxnlms.filter(xreff);
+                lastout = fxnlms.y;
+              } else if (algchoice == 2) {
+                tafxnlms.filter(xreff,filtfbk.y);
+                lastout = tafxnlms.y;
+              } 
+              outputaux = dclevel - ((int)round(lastout));
+              if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
+              else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+              // else { ctrlflags = 0; } 
+          } else {
+              outputaux = dclevel;
+              // ctrlflags = 0;
+          }
+
+          // writeOutput(canalperturb,siggen[canalperturb].next());
+          // writeOutput(canalcontrole,outputaux);
+          
+          // Sending data to the host computer: --------------------------
+          // The first three bytes are used for synchronization. 
+          // Syncronization needs to be improved, but it is working fine.            
+          ctt = 0;
+          tdata.data[ctt++] = 0xF;
+          tdata.data[ctt++] = 0xF;
+          tdata.data[ctt++] = 0xF;
+          tdata.data[ctt++] = siggen[canalperturb].last >> 8;
+          tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
+          tdata.data[ctt++] = outputaux >> 8;
+          tdata.data[ctt++] = outputaux & 0xFF;
+          *(float *) &tdata.data[ctt] = xref;
+          ctt = ctt + 4;
+          *(float *) &tdata.data[ctt] = xerr;
+          ctt = ctt + 4;
+          tdata.data[ctt++] = ctrlflags;
+          timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
+          tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
+          tdata.data[ctt++] = timecounter1 & 0xFF;
+          timecounter2 = (timecounter2 >> 4) & 0xFFFF;
+          tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
+          tdata.data[ctt++] = timecounter2 & 0xFF;
+          tdata.data[ctt++] = errorflags;
+          tdata.nbytes = ctt;
 
       } else { 
 
@@ -550,9 +610,9 @@ void Writing(void * parameter){
 
       }
 
-      if (queue.count() > 0) {
-        wdata = queue.pop();
-        Serial.write(wdata.data,wdata.nbytes);
+      if (tdata.nbytes > 0) {
+        Serial.write(tdata.data,tdata.nbytes);
+        tdata.nbytes = 0;
       }
 
       /*
@@ -570,6 +630,7 @@ void Writing(void * parameter){
 
           case 's':
             if (!controlling) {
+              for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
               ctcycle = 0;
@@ -580,6 +641,7 @@ void Writing(void * parameter){
 
           case 'S': 
             if (!reading) {
+              for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(1.0); }
               dcr[0].reset();
               dcr[1].reset();
               if (algchoice == 0) { fxnlms.reset(); }
@@ -593,7 +655,7 @@ void Writing(void * parameter){
               satlevel = dclevel * 2 - 1;
               outputaux = dclevel;
               xLastWakeTime0 = xTaskGetTickCount();
-              xLastWakeTime1 = xLastWakeTime0;
+              xLastWakeTime1 = xTaskGetTickCount();
               controlling = true;
               reading = false;
             }
@@ -764,6 +826,7 @@ void Writing(void * parameter){
                                                   Serial.read(),(Serial.read() << 8) + Serial.read());
                 }
               }
+              if (controlling) { siggen[idgerador].setFreqMult(1.0); }
               hascmd = 0;
               cthascmd = 0;
             }

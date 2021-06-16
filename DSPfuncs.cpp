@@ -88,6 +88,17 @@ void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel, float 
     }
 }
 
+void SignalGenerator::setFreqMult(float freqmult) {
+    F_SAMPLE = freqmult * BASE_F_SAMPLE;
+    T_SAMPLE = BASE_T_SAMPLE / freqmult;
+    if ((type == 1) || (type == 2)) {
+        sincnst = 2.0 * M_PI * f * T_SAMPLE; 
+    } else if (type == 4) {
+        Psize2 = ((int)round(1.0/f / T_SAMPLE)) >> 1; 
+        last = Z_LEVEL - (int)round(A);
+    }    
+}
+
 void SignalGenerator::setChirpParams(int ti, int di, int tf, int df, int a2) {
     ctinit = (float)(ti) * F_SAMPLE;
     cdeltai = (float)(di) * F_SAMPLE / 10.0;
