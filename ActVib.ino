@@ -49,10 +49,6 @@ int num = 20;
 // Queue<sensorsData> queue = Queue<sensorsData>(num); // Queue of max num 'sensorsData', where 'sensorsData' is a struct
 Queue<transmitData> queue = Queue<transmitData>(num);
 
-// sensorsData input;
-// sensorsData output;
-transmitData tdata;
-transmitData wdata;
 
 // Timing variables: -----------------------------------------------------------------------------
 const float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
@@ -72,6 +68,7 @@ int8_t imutype[3] = {0,0,0};
 int8_t imubus[3] = {0,0,0};
 int8_t imuaddress[3] = {0,0,0};
 uint8_t imuextra[3] = {0,0,0};
+// Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(14),Queue<uint8_t>(14),Queue<uint8_t>(14);
 uint8_t lastimureadings[3][14] = {
   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -86,8 +83,11 @@ uint8_t adcconfig[3] = {0,0,0};
 bool adcenablemap[4] = {false,false,false,false}; 
 uint8_t nextadc,lastadc = 0;
 uint8_t adcseq[4] = {0,0,0,0};
-ADS1115 adc(0x4B,&WireA);
-Queue<uint16_t> adcreadings = Queue<uint16_t>(4);
+uint8_t adctype = 0; // 0 for ADS1115 or 1 for ADS1015
+ADS1115 adc11(0x4B,&WireA);
+ADS1015 adc10(0x4B,&WireA);
+ADS1X15* adc;
+Queue<uint16_t> adcreadings = Queue<uint16_t>(8);
 
 /* 
    In the following, we have definitions for FIR filters used as
@@ -128,7 +128,6 @@ SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGener
 DCRemover dcr[2] = {DCRemover(0.95f),DCRemover(0.95f)};
 
 
-
 bool reading = false; // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
 bool algOn = false; // Flag indicating wheter the control algorithm is on or off
@@ -153,6 +152,7 @@ unsigned char ctrlflags = 0;  // Used for indicating that saturation of the cont
 
 unsigned char cbuf[BUF_SIZE];  // Buffer for storing the byte values before sending them to the host computer.  
 uint8_t cbuf2[20]; 
+
 
 /* Write Outputs
     id = 0 -> mcps[0] (12 bits)
@@ -264,17 +264,18 @@ void loadFlashData() {
   Serial.println("Flash data loaded...");
 }
 
+uint8_t errorflags;  // Errors: None | None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout    
 int8_t flaginitIMU = -1;
-int8_t flagconfigIMU = -1;
-int8_t flagadcconfig = -1;
-int ctt = 0;
-volatile int timecounter;
-int timecounteraux = 0;
+volatile uint32_t timecounter2,timecounter2aux;
 // Reading Task
 void Reading(void * parameter){
 
-  // int timecounter;
-  int auxxxx = 1;
+  uint32_t auxxxx = 0;
+  uint32_t ulNotifiedValue;
+  BaseType_t retnotify = pdFALSE;
+  transmitData tdata;
+  int ctt = 0;
+  uint32_t timecounter1,timecounter1aux;
 
     for (;;) {        
 
@@ -283,49 +284,52 @@ void Reading(void * parameter){
             // Blocks until reaching the next sampling period: --------------------------------------------    
             vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
             // --------------------------------------------------------------------------------------------    
+            errorflags = 0;
+
+            // timecounter1 = ESP.getCycleCount() - timecounter1aux;
+            // timecounter1aux = ESP.getCycleCount();
+            timecounter1 = ESP.getCycleCount();
             
-            // Clear Semaphore:
-            ulTaskNotifyTake(pdTRUE,(TickType_t)0);        
-
-            // timecounter = ESP.getCycleCount();
-
-            // IMU Readings:
-            for (int id = 0; id < 3; id++) {
-                if (imuenable[id] == 1) {  
-                  if (imubus[id] != 0) {
-                    if (imutype[id] == 0) {
-                      mpus[id].readData(&lastimureadings[id][0]);
-                    } else {
-                      lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
-                    }
-                  }                        
-                }
-            }
-
             ctt = 0;
             // First 3 bytes for sync:
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
 
-            // Read semaphore and clear (max wait time is 1 ms):
-            ulTaskNotifyTake(pdTRUE,(TickType_t)1);
-            
-
+            // IMU Readings:
             for (int id = 0; id < 3; id++) {
-                if (imuenable[id] == 1) {
-                  if (imutype[id] == 0) {
-                    // Copy one array to the other:
-                    for (int iii = 0; iii < 14; iii++) {
-                      tdata.data[ctt++] = lastimureadings[id][iii];
+                if (imuenable[id] == 1) {  
+                  if (imubus[id] != 0) {
+                    if (imutype[id] == 0) {
+                      mpus[id].readData(&tdata.data[ctt]);                    
+                    } else {
+                      lsms[id].readRegisterRegion(&tdata.data[ctt],0x22,12);
                     }
-                  } else {
-                    // Copy one array to the other:
-                    for (int iii = 0; iii < 12; iii++) {
-                      tdata.data[ctt++] = lastimureadings[id][iii];
-                    }
-                  }                        
+                  }
+                  if (imutype[id] == 0) { ctt = ctt + 14; }
+                  else { ctt = ctt + 12; }                         
                 }
+            }
+
+            // Read semaphore and clear (max wait time is 1 ms):
+            // auxxxx = ulTaskNotifyTake(pdFALSE,(TickType_t)1);            
+            retnotify = xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+            if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+
+            ctt = 3;
+            for (int id = 0; id < 3; id++) {
+              if (imuenable[id] == 1) {
+                if (imubus[id] != 0) { // Just realign:
+                  if (imutype[id] == 0) { ctt = ctt + 14; }
+                  else { ctt = ctt + 12; }
+                } else { // Copy readings from the other Task:                 
+                  int nbytes = 14;
+                  if (imutype[id] == 1) { nbytes = 12; }
+                  for (int iii = 0; iii < nbytes; iii++) {
+                    tdata.data[ctt++] = lastimureadings[id][iii];
+                  }
+                }
+              }                                      
             }
 
             // Signal Generators:
@@ -337,10 +341,11 @@ void Reading(void * parameter){
                   tdata.data[ctt++] = siggen[id].last;
                 }        
             }
-
+            
             // Send ADC Readings:
-            if (adcconfig[0] > 0) {
-              if (adcreadings.count() < 4) {
+            if ((adcconfig[0] & 0x0F) > 0) {
+              if ((adcreadings.count() < 4) || (adcreadings.count() > 4)) {
+                errorflags = errorflags | 0x02; // Set IncompleteADCRead error
                 adcreadings.clear();
                 for (int iii = 0; iii < 4; iii++) {
                   tdata.data[ctt++] = 0;
@@ -350,17 +355,20 @@ void Reading(void * parameter){
                 for (int iii = 0; iii < 4; iii++) {
                   int16_t adcaux = adcreadings.pop();
                   tdata.data[ctt++] = adcaux >> 8;
-                  tdata.data[ctt++] = adcaux & 0xFF;                
+                  tdata.data[ctt++] = adcaux & 0xFF;
                 }
               }                            
-            } 
+            }
 
-            // timecounter = ESP.getCycleCount() - timecounter;
+            timecounter1 = ESP.getCycleCount() - timecounter1;
 
-            // Sample Time:
-            timecounter = (timecounter >> 4) & 0xFFFF;
-            tdata.data[ctt++] = (timecounter >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter & 0xFF;
+            timecounter1 = (timecounter1 >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timecounter1 >> 8) & 0xFF;
+            tdata.data[ctt++] = timecounter1 & 0xFF;
+            timecounter2 = (timecounter2 >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
+            tdata.data[ctt++] = timecounter2 & 0xFF;
+            tdata.data[ctt++] = errorflags;
             tdata.nbytes = ctt;
             queue.push(tdata); 
      
@@ -371,7 +379,7 @@ void Reading(void * parameter){
             vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
             // --------------------------------------------------------------------------------------------
 
-            timecounter = ESP.getCycleCount(); 
+            timecounter1 = ESP.getCycleCount(); 
             
             // TODO: Move to the other process?:
             writeOutput(canalperturb,siggen[canalperturb].next());
@@ -441,9 +449,9 @@ void Reading(void * parameter){
             *(float *) &tdata.data[ctt] = xerr;
             ctt = ctt + 4;
             tdata.data[ctt++] = ctrlflags;
-            timecounter = (ESP.getCycleCount()-timecounter) >> 4;
-            tdata.data[ctt++] = (timecounter >> 8 & 0xFF);
-            tdata.data[ctt++] = timecounter & 0xFF;
+            timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
+            tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
+            tdata.data[ctt++] = timecounter1 & 0xFF;
             tdata.nbytes = ctt;
 
             queue.push(tdata);
@@ -468,12 +476,14 @@ void Reading(void * parameter){
 }
 
 
-uint8_t imuidd;
 void Writing(void * parameter){
 
+  transmitData wdata;
   uint8_t sr = 0;  // Stores commands read from the computer host.
   char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
   int cthascmd = 0;  // Indicates if the cmd has been treated. TODO: check if it is important or not, maybe could be changed to a flag. 
+  uint8_t ctcycle = 0;
+  uint8_t imuidd;
 
   int auxxxx = 1;
 
@@ -481,9 +491,11 @@ void Writing(void * parameter){
 
       if (reading) {
 
-            vTaskDelayUntil(&xLastWakeTime1,xFrequency1);
+            vTaskDelayUntil(&xLastWakeTime1,xFrequency1);           
 
-            timecounteraux = ESP.getCycleCount();
+            // timecounter2 = ESP.getCycleCount() - timecounter2aux;
+            // timecounter2aux = ESP.getCycleCount();
+            timecounter2 = ESP.getCycleCount();
 
             // Reading IMUS in the main I2C Bus:
             for (int id = 0; id < 3; id++) {
@@ -505,21 +517,23 @@ void Writing(void * parameter){
             }
 
             // ADC readings:
-            if (adcconfig[0] > 0) {
+            if ((adcconfig[0] & 0x0F) > 0) {
               
               if (adcreadings.count() == 0) { nextadc = 0; }
               
               if (adcreadings.count() < 4) {
-                adcreadings.push(adc.getValue());
+                adcreadings.push(adc->getValue());
                 nextadc = (nextadc+1) & 0x03;
-                adc.requestADC(adcseq[nextadc]); 
+                adc->requestADC(adcseq[nextadc]); 
               }
 
             }
 
-            xTaskNotifyGive(reading1);
+            timecounter2 = ESP.getCycleCount() - timecounter2;
 
-            timecounter = ESP.getCycleCount() - timecounteraux;
+            // xTaskNotifyGive(reading1);
+            if (ctcycle == 3) { xTaskNotify(reading1, 0, eNoAction); }  
+            ctcycle = (ctcycle + 1) & 0x03;
 
 
       } else if (controlling) {
@@ -557,7 +571,8 @@ void Writing(void * parameter){
           case 's':
             if (!controlling) {
               xLastWakeTime0 = xTaskGetTickCount();
-              xLastWakeTime1 = xLastWakeTime0;
+              xLastWakeTime1 = xTaskGetTickCount();
+              ctcycle = 0;
               reading = true;
               controlling = false;
             }            
@@ -588,6 +603,7 @@ void Writing(void * parameter){
           case 't':
             reading = false; 
             controlling = false;
+            for (int id = 0; id < 4; id++) { writeOutput(id,0); } // Set outputs to zero after stopping.
             break;
 
 
@@ -759,13 +775,16 @@ void Writing(void * parameter){
               adcconfig[0] = Serial.read();
               adcconfig[1] = Serial.read();
               adcconfig[2] = Serial.read();  
-              adc.setGain((1 << adcconfig[1]) >> 1);
-              adc.setDataRate(adcconfig[2]);  
+              adctype = (adcconfig[0] >> 4);
+              if ( adctype == 0 ) { adc = &adc11; }
+              else { adc = &adc10; }
+              adc->setGain((1 << adcconfig[1]) >> 1);
+              adc->setDataRate(adcconfig[2]); 
               for (int iii = 0; iii < 4; iii++) {
                 adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
               }            
-              if (adcconfig[0] > 0) {            
-                adc.setMode(0);
+              if ((adcconfig[0] & 0x0F) > 0) {            
+                adc->setMode(0);
                 nextadc = 0; 
                 for (int iii = 0; iii < 4; iii++) {
                   while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
@@ -773,11 +792,11 @@ void Writing(void * parameter){
                   nextadc = (nextadc+1) & 0x03;
                 }  
                 nextadc = 0;
-                adc.readADC(adcseq[0]);
+                adc->readADC(adcseq[0]);
               } else {
-                adc.setMode(1);
+                adc->setMode(1);
               }              
-              if (adc.isConnected()) {
+              if (adc->isConnected()) {
                 Serial.write("ok");
                 Serial.write(&adcseq[0],4);
               } else {
@@ -874,7 +893,8 @@ void setup() {
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   pinMode(VSPI_SS, OUTPUT);
 
-  adc.begin();
+  adc11.begin();
+  adc10.begin();
 
   WireA.begin();
   WireA.setClock(1000000L);
@@ -909,7 +929,7 @@ void setup() {
         NULL,               /* Parameter of the task  */
         2,                  /* Priority of the task   */
         &reading1,          /* Task handle to keep track of the task */
-        1);                 /* Core 0 */
+        1);                 /* Core 1 */
     delay(500); 
 
     // disableCore1WDT();    // needed to start-up Reading task  
@@ -923,7 +943,7 @@ void setup() {
         NULL,               /* Parameter of the task  */
         1,                  /* Priority of the task   */
         &writing1,          /* Task handle to keep track of the task */
-        0);                 /* Core 1 */
+        0);                 /* Core 0 */
     delay(500); 
   
 }
