@@ -63,7 +63,7 @@ TickType_t xLastWakeTime1;
 
 
 // Declaring and array with two MPU instances at the I2C bus:
-MPU6050A mpus[3] = { MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA)};
+MPU6050A mpus[3] = { MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA) };
 LSM6DS3 lsms[3] = { LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B) };
 int8_t imuenable[3] = {0,0,0};
 int8_t imutype[3] = {0,0,0};
