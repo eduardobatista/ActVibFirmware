@@ -70,12 +70,12 @@ int8_t imutype[3] = {0,0,0};
 int8_t imubus[3] = {0,0,0};
 int8_t imuaddress[3] = {0,0,0};
 uint8_t imuextra[3] = {0,0,0};
-// Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(14),Queue<uint8_t>(14),Queue<uint8_t>(14);
-uint8_t lastimureadings[3][14] = {
-  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-};
+Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(28),Queue<uint8_t>(28),Queue<uint8_t>(28)};
+// uint8_t lastimureadings[3][14] = {
+//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+// };
 
 // Declaring array of MCPs:
 MCP4725 mcps[2] = { MCP4725(0x61,&WireA), MCP4725(0x60,&WireA) };
@@ -90,6 +90,7 @@ ADS1115 adc11(0x4B,&WireA);
 ADS1015 adc10(0x4B,&WireA);
 ADS1X15* adc;
 Queue<uint16_t> adcreadings = Queue<uint16_t>(8);
+int8_t flaginitADC = 0;
 
 /* 
    In the following, we have definitions for FIR filters used as
@@ -187,8 +188,7 @@ int8_t initIMU(uint8_t IMUid) {
       else if (imubus[IMUid] == 1) { lsms[IMUid].setI2CBus(&WireB); }
       lsms[IMUid].changeI2CAddress(imuaddress[IMUid]);
     } else { // SPI
-      lsms[IMUid].setSPIMode(imuaddress[IMUid]);
-      
+      lsms[IMUid].setSPIMode(imuaddress[IMUid]);      
     }
     lsms[IMUid].config((imuextra[IMUid]>>2) & 0x07, imuextra[IMUid] & 0x03, (imuextra[IMUid]>>5) & 0x07);
     lsms[IMUid].readRawAccelX();
@@ -215,6 +215,33 @@ int8_t initIMU(uint8_t IMUid) {
   }
 
 }
+
+ int8_t initADC(void) {
+    adc->setGain((1 << adcconfig[1]) >> 1);
+    adc->setDataRate(adcconfig[2]); 
+    for (int iii = 0; iii < 4; iii++) {
+      adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
+    }            
+    if ((adcconfig[0] & 0x0F) > 0) {            
+      adc->setMode(0);
+      nextadc = 0; 
+      for (int iii = 0; iii < 4; iii++) {
+        while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
+        adcseq[iii] = nextadc;
+        nextadc = (nextadc+1) & 0x03;
+      }  
+      nextadc = 0;
+      adc->readADC(adcseq[0]);
+    } else {
+      adc->setMode(1);
+    }             
+    if (adc->isConnected()) {
+      return 0;
+    } else {
+      return -1;
+    }   
+  }
+
 
 /* 
   Receive data regarding the paths via serial port.
@@ -268,6 +295,7 @@ void loadFlashData() {
   
 int8_t flaginitIMU = -1;
 volatile uint32_t timecounter2,timecounter2aux;
+int32_t cttcycle = 0;
 // Reading Task
 void Reading(void * parameter){
 
@@ -275,6 +303,7 @@ void Reading(void * parameter){
   transmitData tdata;
   int ctt = 0;
   uint32_t timecounter1,timecounter1aux;
+  uint8_t imuaux[14];
 
     for (;;) {        
 
@@ -286,18 +315,28 @@ void Reading(void * parameter){
             // timecounter2aux = ESP.getCycleCount();
             timecounter2 = ESP.getCycleCount();
 
+            if ( cttcycle == 0 ) {              
             // Reading IMUS in the main I2C Bus:
-            for (int id = 0; id < 3; id++) {
-                if (imuenable[id] == 1) {  
-                  if (imubus[id] == 0) {
-                    if (imutype[id] == 0) {
-                      mpus[id].readData(&lastimureadings[id][0]);
-                    } else {
-                      lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
-                    }
-                  }                        
-                }
+              for (int id = 0; id < 3; id++) {
+                  if (imuenable[id] == 1) {  
+                    if (imubus[id] == 0) {
+                      if (imutype[id] == 0) {
+                        // mpus[id].readData(&lastimureadings[id][0]);
+                        mpus[id].readData(&imuaux[0]);
+                      } else {
+                        // lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
+                        lsms[id].readRegisterRegion(&imuaux[0],0x22,12);                      
+                      }
+                      lastimureadings[id].clear();
+                      for (int idd = 0; idd < 14; idd++) {
+                        lastimureadings[id].push(imuaux[idd]);
+                      }                    
+                    }                        
+                  }
+              }
             }
+            cttcycle++;
+            if (cttcycle == 4) { cttcycle = 0; }
 
             // Generator outputs:
             for (int id = 0; id < 4; id++) {
@@ -366,6 +405,10 @@ void Reading(void * parameter){
             flaginitIMU = initIMU(flaginitIMU);
           }           
 
+          if (flaginitADC == 1) {
+            flaginitADC = initADC();
+          }
+
           // If not controlling nor reading, one can delay for a while:
           delay(1);
 
@@ -426,7 +469,7 @@ void Writing(void * parameter){
                     }
                   }
                   if (imutype[id] == 0) { ctt = ctt + 14; }
-                  else { ctt = ctt + 12; }                         
+                  else { ctt = ctt + 12; }
                 }
             }
 
@@ -446,7 +489,8 @@ void Writing(void * parameter){
                   int nbytes = 14;
                   if (imutype[id] == 1) { nbytes = 12; }
                   for (int iii = 0; iii < nbytes; iii++) {
-                    tdata.data[ctt++] = lastimureadings[id][iii];
+                    // tdata.data[ctt++] = lastimureadings[id][iii];
+                    tdata.data[ctt++] = lastimureadings[id].pop();
                   }
                 }
               }                                      
@@ -634,6 +678,7 @@ void Writing(void * parameter){
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
               ctcycle = 0;
+              cttcycle = 0;
               reading = true;
               controlling = false;
             }            
@@ -658,6 +703,7 @@ void Writing(void * parameter){
               xLastWakeTime1 = xTaskGetTickCount();
               controlling = true;
               reading = false;
+              cttcycle = 0;
             }
             break;
 
@@ -684,7 +730,7 @@ void Writing(void * parameter){
           case 'i':
             if ((!reading) && (!controlling)){ 
               sr = Serial.read();
-              if (imubus[sr] == 0) {
+              if (imubus[sr] != 0) {
                 flaginitIMU = initIMU(sr);
               } else {
                 flaginitIMU = sr;
@@ -755,6 +801,7 @@ void Writing(void * parameter){
             break;
 
           case 'r':
+            Serial.println("--------");
             Serial.println(imubus[0]);
             Serial.println(imutype[0]);
             Serial.println(imuaddress[0]);
@@ -840,31 +887,39 @@ void Writing(void * parameter){
               adcconfig[2] = Serial.read();  
               adctype = (adcconfig[0] >> 4);
               if ( adctype == 0 ) { adc = &adc11; }
-              else { adc = &adc10; }
-              adc->setGain((1 << adcconfig[1]) >> 1);
-              adc->setDataRate(adcconfig[2]); 
-              for (int iii = 0; iii < 4; iii++) {
-                adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
-              }            
-              if ((adcconfig[0] & 0x0F) > 0) {            
-                adc->setMode(0);
-                nextadc = 0; 
-                for (int iii = 0; iii < 4; iii++) {
-                  while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
-                  adcseq[iii] = nextadc;
-                  nextadc = (nextadc+1) & 0x03;
-                }  
-                nextadc = 0;
-                adc->readADC(adcseq[0]);
-              } else {
-                adc->setMode(1);
-              }              
-              if (adc->isConnected()) {
+              else { adc = &adc10; }              
+              // adc->setGain((1 << adcconfig[1]) >> 1);
+              // adc->setDataRate(adcconfig[2]); 
+              // for (int iii = 0; iii < 4; iii++) {
+              //   adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
+              // }            
+              // if ((adcconfig[0] & 0x0F) > 0) {            
+              //   adc->setMode(0);
+              //   nextadc = 0; 
+              //   for (int iii = 0; iii < 4; iii++) {
+              //     while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
+              //     adcseq[iii] = nextadc;
+              //     nextadc = (nextadc+1) & 0x03;
+              //   }  
+              //   nextadc = 0;
+              //   adc->readADC(adcseq[0]);
+              // } else {
+              //   adc->setMode(1);
+              // }             
+              // if (adc->isConnected()) {
+              //   Serial.write("ok");
+              //   Serial.write(&adcseq[0],4);
+              // } else {
+              //   Serial.write("e!");
+              // }        
+              flaginitADC = 1;
+              while (flaginitADC > 0) { delay(1); }
+              if (flaginitADC == 0) {
                 Serial.write("ok");
                 Serial.write(&adcseq[0],4);
               } else {
-                Serial.write("er");
-              }          
+                Serial.write("e!");
+              }
               hascmd = 0;
               cthascmd = 0;  
             }
