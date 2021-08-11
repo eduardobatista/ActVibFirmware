@@ -295,7 +295,7 @@ void loadFlashData() {
   
 int8_t flaginitIMU = -1;
 volatile uint32_t timecounter2,timecounter2aux;
-int32_t cttcycle = 0;
+uint8_t cttcycle = 0;
 // Reading Task
 void Reading(void * parameter){
 
@@ -313,9 +313,10 @@ void Reading(void * parameter){
 
             // timecounter2 = ESP.getCycleCount() - timecounter2aux;
             // timecounter2aux = ESP.getCycleCount();
-            timecounter2 = ESP.getCycleCount();
+            // timecounter2 = ESP.getCycleCount();
 
             if ( cttcycle == 0 ) {              
+              timecounter2 = ESP.getCycleCount();
             // Reading IMUS in the main I2C Bus:
               for (int id = 0; id < 3; id++) {
                   if (imuenable[id] == 1) {  
@@ -335,8 +336,8 @@ void Reading(void * parameter){
                   }
               }
             }
-            cttcycle++;
-            if (cttcycle == 4) { cttcycle = 0; }
+            // cttcycle++;
+            // if (cttcycle == 4) { cttcycle = 0; }
 
             // Generator outputs:
             for (int id = 0; id < 4; id++) {
@@ -357,10 +358,16 @@ void Reading(void * parameter){
 
             }
 
-            timecounter2 = ESP.getCycleCount() - timecounter2;
+            // timecounter2 = ESP.getCycleCount() - timecounter2;
+            if (cttcycle == 0) {
+              timecounter2 = ESP.getCycleCount() - timecounter2;  
+              xTaskNotify(writing1, 0, eNoAction);            
+            }
+            cttcycle++;
+            if (cttcycle == 4) { cttcycle = 0; }
 
             // xTaskNotifyGive(writing1);
-            xTaskNotify(writing1, 0, eNoAction);
+            // xTaskNotify(writing1, 0, eNoAction);
 
             
         } else if (controlling) {  // If Control Mode is on:
@@ -430,7 +437,7 @@ void Writing(void * parameter){
   uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
-  uint32_t timecounter1,timecounter1aux;
+  uint32_t timecounter1,timecounter1a;
 
   uint8_t errorflags;  // Errors: None | None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout  
 
@@ -448,8 +455,6 @@ void Writing(void * parameter){
             tdata.nbytes = 0;  
             errorflags = 0;
 
-            // timecounter1 = ESP.getCycleCount() - timecounter1aux;
-            // timecounter1aux = ESP.getCycleCount();
             timecounter1 = ESP.getCycleCount();
             
             ctt = 0;
@@ -473,10 +478,12 @@ void Writing(void * parameter){
                 }
             }
 
+            timecounter1a = ESP.getCycleCount() - timecounter1;
+
             // Read semaphore and clear (max wait time is 1 ms):
             // auxxxx = ulTaskNotifyTake(pdFALSE,(TickType_t)1);    
             // if (auxxxx == 0) { errorflags = errorflags | 0x01; }        
-            retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+            retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)2);
             if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
 
             ctt = 3;
@@ -529,6 +536,9 @@ void Writing(void * parameter){
             timecounter1 = (timecounter1 >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timecounter1 >> 8) & 0xFF;
             tdata.data[ctt++] = timecounter1 & 0xFF;
+            timecounter1a = (timecounter1a >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
+            tdata.data[ctt++] = timecounter1a & 0xFF;
             timecounter2 = (timecounter2 >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
             tdata.data[ctt++] = timecounter2 & 0xFF;
@@ -560,6 +570,8 @@ void Writing(void * parameter){
               xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
             }            
           }
+
+          timecounter1a = ESP.getCycleCount() - timecounter1;
 
           retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
           if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
@@ -638,6 +650,9 @@ void Writing(void * parameter){
           timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
           tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
           tdata.data[ctt++] = timecounter1 & 0xFF;
+          timecounter1a = (timecounter1a >> 4) & 0xFFFF;
+          tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
+          tdata.data[ctt++] = timecounter1a & 0xFF;
           timecounter2 = (timecounter2 >> 4) & 0xFFFF;
           tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
           tdata.data[ctt++] = timecounter2 & 0xFF;
@@ -675,8 +690,8 @@ void Writing(void * parameter){
           case 's':
             if (!controlling) {
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
-              xLastWakeTime0 = xTaskGetTickCount();
-              xLastWakeTime1 = xTaskGetTickCount();
+              xLastWakeTime0 = xTaskGetTickCount() - xFrequency0;
+              xLastWakeTime1 = xTaskGetTickCount() - xFrequency1;
               ctcycle = 0;
               cttcycle = 0;
               reading = true;
