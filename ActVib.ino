@@ -47,7 +47,7 @@ struct transmitData{
 int num = 20;  
 //Queue used to exchange data between reading and writing tasks
 // Queue<sensorsData> queue = Queue<sensorsData>(num); // Queue of max num 'sensorsData', where 'sensorsData' is a struct
-Queue<transmitData> queue = Queue<transmitData>(num);
+// Queue<transmitData> queue = Queue<transmitData>(num);
 
 Queue<float> controlqueue = Queue<float>(2);
 
@@ -61,6 +61,7 @@ TickType_t xFrequency1 = 1;  // Second process may be sped up by changing this v
 TickType_t xLastWakeTime1;
 // ------------------------------------------------------------------------------------------------
 
+EventGroupHandle_t xEventGroup;
 
 // Declaring and array with two MPU instances at the I2C bus:
 MPU6050A mpus[3] = { MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA) };
@@ -71,11 +72,6 @@ int8_t imubus[3] = {0,0,0};
 int8_t imuaddress[3] = {0,0,0};
 uint8_t imuextra[3] = {0,0,0};
 Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(28),Queue<uint8_t>(28),Queue<uint8_t>(28)};
-// uint8_t lastimureadings[3][14] = {
-//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-//   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-// };
 
 // Declaring array of MCPs:
 MCP4725 mcps[2] = { MCP4725(0x61,&WireA), MCP4725(0x60,&WireA) };
@@ -121,15 +117,13 @@ float xa2[1000];
 float xasec2[1000];
 TAFxNLMS tafxnlms = TAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2);
 
-// Two signal generators defined below, since we have two output channels.
-// 1668 is chosen to have outputs between 0 and 10V, avoiding saturation.
+// Four signal generators defined below, since we have four output channels.
 SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGenerator(F_SAMPLE,T_SAMPLE,2048),
                              SignalGenerator(F_SAMPLE,T_SAMPLE,128),SignalGenerator(F_SAMPLE,T_SAMPLE,128)};
 
 // DC removal is needed when working with adaptive control algorithms.
 // Definitions of simple IIR-based DC removers for the two inputs from accelerometers:
 DCRemover dcr[2] = {DCRemover(0.95f),DCRemover(0.95f)};
-
 
 bool reading = false; // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
@@ -154,14 +148,14 @@ float lastout = 0;  // The last (float) value of the control signal, which feeds
 unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
 
 unsigned char cbuf[BUF_SIZE];  // Buffer for storing the byte values before sending them to the host computer.  
-uint8_t cbuf2[20]; 
+uint8_t cbuf2[20]; // Stores temporary data from commmunication buses.
 
 
 /* Write Outputs
     id = 0 -> mcps[0] (12 bits)
     id = 1 -> mcps[1] (12 bits)
-    id = 2 -> GPIO25 (Eletroimã 3)
-    id = 3 -> GPIO26 (Eletroimã 4)
+    id = 2 -> GPIO25 (Eletroimã 3 - 8 bits)
+    id = 3 -> GPIO26 (Eletroimã 4  - 8 bits)
 */
 void writeOutput(int id,int val) {
     if (id < 2) {
@@ -173,8 +167,14 @@ void writeOutput(int id,int val) {
 }
 
 
+/*
+    Initialization of IMU, involving definitions and connection check.
+     - Parameter IMUid is de number of the IMU sensor (from 0 to 2).
+     - Returns -1 in case of success and -2 in case of error.
+*/
 int8_t initIMU(uint8_t IMUid) {  
   
+  // General IMU configuration:
   if (imutype[IMUid] == 0) { // MPU6050
     if (imubus[IMUid] == 0) { mpus[IMUid].setI2C(&WireA); }
     else if (imubus[IMUid] == 1) { mpus[IMUid].setI2C(&WireB); }              
@@ -194,13 +194,14 @@ int8_t initIMU(uint8_t IMUid) {
     lsms[IMUid].readRawAccelX();
   }
 
-  if (imutype[IMUid] == 0 ) {
+  // IMU connection check:
+  if (imutype[IMUid] == 0 ) { // MPU6050
     mpus[IMUid].initMPU();
     mpus[IMUid].readData(cbuf2);
     mpus[IMUid].checkMPU();
     if (mpus[IMUid].responseOk) { return -1; } 
     else { return -2;  }
-  } else {
+  } else { // LSM6DS3
     status_t aux = lsms[IMUid].begin();
     if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); } 
     if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); }         
@@ -216,7 +217,12 @@ int8_t initIMU(uint8_t IMUid) {
 
 }
 
- int8_t initADC(void) {
+
+/*
+    Initialization of the ADC, involving definitions and connection check.
+     - Returns 0 in case of success and -1 in case of error (sensor not found).
+*/
+int8_t initADC(void) {
     adc->setGain((1 << adcconfig[1]) >> 1);
     adc->setDataRate(adcconfig[2]); 
     for (int iii = 0; iii < 4; iii++) {
@@ -240,7 +246,7 @@ int8_t initIMU(uint8_t IMUid) {
     } else {
       return -1;
     }   
-  }
+}
 
 
 /* 
@@ -292,32 +298,58 @@ void loadFlashData() {
   filtfbk.setMem(Nfbk);
   Serial.println("Flash data loaded...");
 }
-  
-int8_t flaginitIMU = -1;
-volatile uint32_t timecounter2,timecounter2aux;
-uint8_t cttcycle = 0;
-// Reading Task
-void Reading(void * parameter){
+
+/*
+  Definition of variables required for task management, communication, etc.
+*/ 
+int8_t flaginitIMU = -1; 
+uint8_t cttcycle = 0; 
+Queue<uint32_t> tcount2queue = Queue<uint32_t>(2);
+
+
+/* ===== Auxiliary Task (Core 1 - Former Reading Task) ===================================
+
+- In **standy mode**, this task checks if IMU in bus I2C-1 needs to be initialized
+  or if ADC needs to be initialized. If needed, initialize these elements. Otherwise,
+  delays for 1 ms.
+
+- In **reading mode**, this task runs at 1 kHz executing the following steps:
+    -- At each four cycles (250 Hz), IMUs from bus I2C-1 are read.
+    -- Generator outputs are written (at every cycle - 1 kHz)
+    -- ADC is read (at every cycle - 1 kHz)
+    -- Elapsed time is evaluated (at each four cycles - 250 Hz), which results in
+       worst case elapsed time for task.
+    -- A notification to MAINTASK is sent (at each four cycles - 250 Hz - since TASK 1
+       runs at 250 Hz). WARNING: AUXTASK and MAINTASK need to be synchronized, meaning that
+       AUXTASK must have cttcycle = 0 when MAINTASK runs.
+
+- In **controlling mode**, this task runs at 250 Hz, executing the following steps:
+    -- Writes perturbation and control outputs.
+    -- Read IMUs in I2C-1 bus.
+    -- Notifies MAINTASK so it can continue.
+    -- Measures time of execution (timecounter2).
+
+=====================================================================================*/ 
+void AuxTask(void * parameter){
 
   uint32_t auxxxx = 0;  
   transmitData tdata;
   int ctt = 0;
-  uint32_t timecounter1,timecounter1aux;
+  uint32_t timecounter2;
   uint8_t imuaux[14];
+  EventBits_t uxBits;
 
     for (;;) {        
 
         if (reading) {  // If Reading Mode is on:
 
-          vTaskDelayUntil(&xLastWakeTime1,xFrequency1);           
+          vTaskDelayUntil(&xLastWakeTime1,xFrequency1);
 
-            // timecounter2 = ESP.getCycleCount() - timecounter2aux;
-            // timecounter2aux = ESP.getCycleCount();
-            // timecounter2 = ESP.getCycleCount();
-
-            if ( cttcycle == 0 ) {              
-              timecounter2 = ESP.getCycleCount();
-            // Reading IMUS in the main I2C Bus:
+            if ( cttcycle == 0 ) {    
+              tcount2queue.clear();
+              tcount2queue.push(ESP.getCycleCount()); 
+              uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
+              // Reading IMUS in the main I2C Bus:
               for (int id = 0; id < 3; id++) {
                   if (imuenable[id] == 1) {  
                     if (imubus[id] == 0) {
@@ -358,16 +390,13 @@ void Reading(void * parameter){
 
             }
 
-            // timecounter2 = ESP.getCycleCount() - timecounter2;
             if (cttcycle == 0) {
-              timecounter2 = ESP.getCycleCount() - timecounter2;  
-              xTaskNotify(writing1, 0, eNoAction);            
+              tcount2queue.push(ESP.getCycleCount()); 
+              // xTaskNotify(writing1, 0, eNoAction);
+              uxBits = xEventGroupSetBits(xEventGroup, 0x02);
             }
             cttcycle++;
             if (cttcycle == 4) { cttcycle = 0; }
-
-            // xTaskNotifyGive(writing1);
-            // xTaskNotify(writing1, 0, eNoAction);
 
             
         } else if (controlling) {  // If Control Mode is on:
@@ -375,15 +404,19 @@ void Reading(void * parameter){
             // Blocks until reaching the time for next sample: --------------------------------------------
             vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
             // --------------------------------------------------------------------------------------------
+            uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
 
-            timecounter2 = ESP.getCycleCount(); 
+            tcount2queue.clear();
+            tcount2queue.push(ESP.getCycleCount()); 
             
             controlqueue.clear();
 
-            // TODO: Move to the other process?:
+            // Writing outputs:
             writeOutput(canalperturb,siggen[canalperturb].next());
             writeOutput(canalcontrole,outputaux);
 
+            // Read sensors from bus I2C-1, filter readings for DC removal, 
+            // put readings at controlqueue.
             if (imubus[idRefIMU] == 0) {
               if (imutype[idRefIMU] == 0) {
                 controlqueue.push(dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor)));
@@ -399,9 +432,12 @@ void Reading(void * parameter){
               }
             }
 
-            xTaskNotify(writing1, 0, eNoAction);
+            // Notifies TASK 1:
+            // xTaskNotify(writing1, 0, eNoAction);
+            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to start MainTask
 
-            timecounter2 = ESP.getCycleCount() - timecounter2;
+            // timecounter2 = ESP.getCycleCount() - timecounter2;
+            tcount2queue.push(ESP.getCycleCount()); 
 
         } else {
 
@@ -426,7 +462,42 @@ void Reading(void * parameter){
 }
 
 
-void Writing(void * parameter){
+
+/* ===== Main Task (Core 0 - Former Writing Task) ==========================================
+
+=> ALWAYS after dealing with de different modes: 
+   -- Check if there is serial data to send and sends it if needed.
+   -- Deal with commands coming from the serial port (USART).
+
+- In **standy mode**, sleeps for 1 ms if no data has been received via USART (Serial)
+  and there is no data to transmit.
+
+- In **reading mode**, this task runs at 250 Hz executing the following steps:
+    -- Clears all registered notifications that hapened before.
+    -- IMUs from I2C-2 and SPI buses are read.
+    -- Measures intermediate elapsed time value (timecounter1a).
+    -- Stops, waiting for a notification from AUXTASK.
+    -- Set up data package to be transmit via serial port:
+       -- Get readings from IMUs read in AUXTASK (lastimureadings queues).
+       -- Get values for signal generators.
+       -- Get ADC readings obtained in AUXTASK (adcreadings queue).
+    -- Measure elapsed time again (from the beginning of this task, including the 
+       time stopped waiting for a notification from AUXTASK).
+
+- In **controlling mode**, this task runs at 250 Hz executing the following steps:
+    -- Clears all registered notifications that hapened before.
+    -- Sensors at IMUs from I2C-2 and SPI buses are read.
+    -- Measures intermediate elapsed time value (timecounter1a).
+    -- Stops, waiting for a notification from AUXTASK.
+    -- Gets readings that happened in AUXTASK (controlqueue)
+    -- If control algorithm is on (AlgOn), updates filter coefficients.
+    -- Performs feedback filter reading. 
+    -- If AlgOn, filters with the adaptive filter (i.e., control effort calculation).
+    -- Prepares data package to be sent via serial port.
+
+        
+=====================================================================================*/ 
+void MainTask(void * parameter){
 
   uint8_t sr = 0;  // Stores commands read from the computer host.
   char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
@@ -437,25 +508,35 @@ void Writing(void * parameter){
   uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
-  uint32_t timecounter1,timecounter1a;
+  uint32_t timecounter1,timecounter1a,timecounter2;
 
-  uint8_t errorflags;  // Errors: None | None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout  
+  uint8_t errorflags;  // Errors: None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout2  | TaskNotifyTimeout1  
 
   uint32_t ulNotifiedValue;
   BaseType_t retnotify = pdFALSE;
+
+  EventBits_t uxBits;
 
     for (;;) {
 
       if (reading) {
 
             // Blocks until reaching the next sampling period: --------------------------------------------    
-            vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
+            // vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
             // -------------------------------------------------------------------------------------------- 
-            xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
-            tdata.nbytes = 0;  
-            errorflags = 0;
+            // xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
+
+            errorflags = 0;   
+            // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+            uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
+            // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; } 
 
             timecounter1 = ESP.getCycleCount();
+
+            tdata.nbytes = 0;  
+                    
             
             ctt = 0;
             // First 3 bytes for sync:
@@ -479,12 +560,12 @@ void Writing(void * parameter){
             }
 
             timecounter1a = ESP.getCycleCount() - timecounter1;
-
-            // Read semaphore and clear (max wait time is 1 ms):
-            // auxxxx = ulTaskNotifyTake(pdFALSE,(TickType_t)1);    
-            // if (auxxxx == 0) { errorflags = errorflags | 0x01; }        
-            retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)2);
-            if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+      
+            // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)2);
+            // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout           
+            // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
+            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x02; } 
 
             ctt = 3;
             for (int id = 0; id < 3; id++) {
@@ -533,6 +614,9 @@ void Writing(void * parameter){
 
             timecounter1 = ESP.getCycleCount() - timecounter1;
 
+            timecounter2 = tcount2queue.pop();
+            timecounter2 = tcount2queue.pop() - timecounter2;
+
             timecounter1 = (timecounter1 >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timecounter1 >> 8) & 0xFF;
             tdata.data[ctt++] = timecounter1 & 0xFF;
@@ -549,10 +633,16 @@ void Writing(void * parameter){
       } else if (controlling) {
 
           // Blocks until reaching the time for next sample: --------------------------------------------
-          vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
+          // vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
           // --------------------------------------------------------------------------------------------
-          xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
+          // xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
+
           errorflags = 0;
+          // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+          uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
+          // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+          uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+          if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }          
 
           timecounter1 = ESP.getCycleCount();
 
@@ -573,8 +663,12 @@ void Writing(void * parameter){
 
           timecounter1a = ESP.getCycleCount() - timecounter1;
 
-          retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
-          if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+          // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+          // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+
+          // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+          uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
+          if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x02; } 
 
           if (imubus[idRefIMU] == 0) {
             if (controlqueue.count() == 0) { 
@@ -653,6 +747,8 @@ void Writing(void * parameter){
           timecounter1a = (timecounter1a >> 4) & 0xFFFF;
           tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
           tdata.data[ctt++] = timecounter1a & 0xFF;
+          timecounter2 = tcount2queue.pop();
+          timecounter2 = tcount2queue.pop() - timecounter2;
           timecounter2 = (timecounter2 >> 4) & 0xFFFF;
           tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
           tdata.data[ctt++] = timecounter2 & 0xFF;
@@ -662,7 +758,7 @@ void Writing(void * parameter){
       } else { 
 
         // If not reading nor controlling nor have data to treat, sleep for a while:
-        while ( (Serial.available() == 0) && (queue.count() == 0) ) {
+        while ( (Serial.available() == 0) && (tdata.nbytes == 0) ) {
           // delayMicroseconds(50);
           vTaskDelay((TickType_t)1);
         }
@@ -690,8 +786,10 @@ void Writing(void * parameter){
           case 's':
             if (!controlling) {
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
-              xLastWakeTime0 = xTaskGetTickCount() - xFrequency0;
-              xLastWakeTime1 = xTaskGetTickCount() - xFrequency1;
+              xEventGroupClearBits(xEventGroup,0x03); 
+              TickType_t actualtcount = xTaskGetTickCount();
+              xLastWakeTime0 = actualtcount - xFrequency0;
+              xLastWakeTime1 = actualtcount - xFrequency1;
               ctcycle = 0;
               cttcycle = 0;
               reading = true;
@@ -714,6 +812,7 @@ void Writing(void * parameter){
               dclevel = siggen[canalcontrole].Z_LEVEL;
               satlevel = dclevel * 2 - 1;
               outputaux = dclevel;
+              xEventGroupClearBits(xEventGroup,0x03);
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
               controlling = true;
@@ -1032,23 +1131,16 @@ void setup() {
   WireA.begin();
   WireA.setClock(1000000L);
   WireB.begin(13,14,1000000L); // Test: GPIO14 as SCL and GPIO13 as SDA 
- 
-  // mpus[0].setI2C(&WireA);
-  // mpus[0].initMPU();
-  // mpus[0].checkMPU();
-
-  // mpus[1].setI2C(&WireB);
-  // mpus[1].initMPU();
-  // mpus[1].checkMPU();
 
   mcps[0].begin();
   mcps[1].begin();
-
 
   siggen[0].setType(0,0,10,2048,1.0);
   siggen[1].setType(0,0,10,2048,1.0);
   siggen[2].setType(0,0,10,128,1.0);
   siggen[3].setType(0,0,10,128,1.0);
+
+  xEventGroup = xEventGroupCreate();
 
   loadFlashData();
 
@@ -1056,8 +1148,8 @@ void setup() {
     // disableCore1WDT(); 
     // Inicialização Core 0 (Leitura)
     xTaskCreatePinnedToCore(
-        Reading,            /* Task function          */
-        "Reading Task",     /* Name of the task       */ 
+        AuxTask,            /* Task function          */
+        "Auxiliary Task",     /* Name of the task       */ 
         2048,               /* Stack size of the task */
         NULL,               /* Parameter of the task  */
         2,                  /* Priority of the task   */
@@ -1070,11 +1162,11 @@ void setup() {
     disableCore0WDT();
     //  // Inicialização Core 0 (Leitura)
     xTaskCreatePinnedToCore(
-        Writing,            /* Task function          */
-        "Writing Task",     /* Name of the task       */ 
+        MainTask,            /* Task function          */
+        "Main Task",     /* Name of the task       */ 
         2048,               /* Stack size of the task */
         NULL,               /* Parameter of the task  */
-        1,                  /* Priority of the task   */
+        2,                  /* Priority of the task   */
         &writing1,          /* Task handle to keep track of the task */
         0);                 /* Core 0 */
     delay(500); 
@@ -1082,7 +1174,7 @@ void setup() {
 }
 
 void loop() {
-  vTaskDelay(10000);
+  // vTaskDelay(10000);
   vTaskDelete(NULL);
   vTaskSuspend(NULL);  
 }
