@@ -565,7 +565,7 @@ void MainTask(void * parameter){
             // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout           
             // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
             uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
-            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x02; } 
+            if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
 
             ctt = 3;
             for (int id = 0; id < 3; id++) {
