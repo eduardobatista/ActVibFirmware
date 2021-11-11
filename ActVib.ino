@@ -53,12 +53,13 @@ Queue<float> controlqueue = Queue<float>(2);
 
 
 // Timing variables: -----------------------------------------------------------------------------
-const float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
-const float T_SAMPLE = 0.004;  // Sampling period in seconds
-const TickType_t xFrequency0 = 4;   // Main process will run at 4 ticks = 4 ms period
+float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
+float T_SAMPLE = 0.004;  // Sampling period in seconds
+TickType_t xFrequency0 = 4;   // Main process will run at 4 ticks = 4 ms period
 TickType_t xLastWakeTime0; 
 TickType_t xFrequency1 = 1;  // Second process may be sped up by changing this value to 1 or 2; Default is 4.
 TickType_t xLastWakeTime1;
+uint8_t CTTRatio = 4;
 // ------------------------------------------------------------------------------------------------
 
 EventGroupHandle_t xEventGroup;
@@ -382,7 +383,7 @@ void AuxTask(void * parameter){
               
               if (adcreadings.count() == 0) { nextadc = 0; }
               
-              if (adcreadings.count() < 4) {
+              if (adcreadings.count() < 4) {  // TODO: change the 4 here to accomodate other sampling rates.
                 adcreadings.push(adc->getValue());
                 nextadc = (nextadc+1) & 0x03;
                 adc->requestADC(adcseq[nextadc]); 
@@ -396,7 +397,7 @@ void AuxTask(void * parameter){
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
             }
             cttcycle++;
-            if (cttcycle == 4) { cttcycle = 0; }
+            if (cttcycle == CTTRatio) { cttcycle = 0; }
 
             
         } else if (controlling) {  // If Control Mode is on:
@@ -596,19 +597,25 @@ void MainTask(void * parameter){
             
             // Send ADC Readings:
             if ((adcconfig[0] & 0x0F) > 0) {
-              if ((adcreadings.count() < 4) || (adcreadings.count() > 4)) {
+              // if ((adcreadings.count() < CTTRatio) || (adcreadings.count() > CTTRatio)) {
+              if (adcreadings.count() != CTTRatio) {
                 errorflags = errorflags | 0x02; // Set IncompleteADCRead error
                 adcreadings.clear();
-                for (int iii = 0; iii < 4; iii++) {
+                for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
                   tdata.data[ctt++] = 0;
                   tdata.data[ctt++] = 0;
                 }
               } else {
-                for (int iii = 0; iii < 4; iii++) {
-                  int16_t adcaux = adcreadings.pop();
-                  tdata.data[ctt++] = adcaux >> 8;
-                  tdata.data[ctt++] = adcaux & 0xFF;
-                }
+                for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
+                  if (iii < CTTRatio) {
+                    int16_t adcaux = adcreadings.pop();
+                    tdata.data[ctt++] = adcaux >> 8;
+                    tdata.data[ctt++] = adcaux & 0xFF;
+                  } else {
+                    tdata.data[ctt++] = 0;
+                    tdata.data[ctt++] = 0; 
+                  }                  
+                }                
               }                            
             }
 
@@ -829,6 +836,11 @@ void MainTask(void * parameter){
             break;
 
 
+          case 'f':            
+            hascmd = 'f';
+            break;
+
+
           case 'P':
             if (!reading && !controlling) {
               prefs.begin("AlgData");
@@ -840,6 +852,7 @@ void MainTask(void * parameter){
               Serial.print("ok!");
             }
             break;
+
 
           case 'i':
             if ((!reading) && (!controlling)){ 
@@ -953,6 +966,19 @@ void MainTask(void * parameter){
         } 
 
         switch(hascmd) {
+
+          case 'f':
+            if (Serial.available() > 0) {
+              CTTRatio =  Serial.read();
+              T_SAMPLE = ((float)CTTRatio) * 1e-3;
+              F_SAMPLE = 1.0 / T_SAMPLE;
+              xFrequency0 = CTTRatio; 
+              Serial.write("k");
+              Serial.write(CTTRatio);  
+              cthascmd = 0;
+              hascmd = 0;
+            } 
+            break;
 
           case 'I':
             if (Serial.available() >= 4) {
@@ -1120,6 +1146,7 @@ void setup() {
   // Serial.begin(115200);
   // Serial.begin(230400);
   Serial.begin(500000);
+  // Serial.begin(500000);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);
