@@ -306,6 +306,7 @@ void loadFlashData() {
 int8_t flaginitIMU = -1; 
 uint8_t cttcycle = 0; 
 Queue<uint32_t> tcount2queue = Queue<uint32_t>(2);
+bool flagzeroed = false;
 
 
 /* ===== Auxiliary Task (Core 1 - Former Reading Task) ===================================
@@ -451,6 +452,11 @@ void AuxTask(void * parameter){
 
           if (flaginitADC == 1) {
             flaginitADC = initADC();
+          }
+
+          if (!flagzeroed) {
+            for (int id = 0; id < 4; id++) { writeOutput(id,0); }
+            flagzeroed = true;
           }
 
           // If not controlling nor reading, one can delay for a while:
@@ -832,7 +838,8 @@ void MainTask(void * parameter){
           case 't':
             reading = false; 
             controlling = false;
-            for (int id = 0; id < 4; id++) { writeOutput(id,0); } // Set outputs to zero after stopping.
+            // for (int id = 0; id < 4; id++) { writeOutput(id,0); } // Set outputs to zero after stopping.
+            flagzeroed = false;
             break;
 
 
@@ -1161,6 +1168,8 @@ void setup() {
 
   mcps[0].begin();
   mcps[1].begin();
+
+  flagzeroed = false;
 
   siggen[0].setType(0,0,10,2048,1.0);
   siggen[1].setType(0,0,10,2048,1.0);
