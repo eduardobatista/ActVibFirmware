@@ -681,7 +681,7 @@ void MainTask(void * parameter){
 
           // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
           uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
-          if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x02; } 
+          if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
 
           if (imubus[idRefIMU] == 0) {
             if (controlqueue.count() == 0) { 
