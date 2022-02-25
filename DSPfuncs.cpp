@@ -112,12 +112,14 @@ int SignalGenerator::next() {
       if (type == 1) {
         n = n + 1.0;
         // last = (int)round(A * sin(sincnst*n)) + 128;
-        last = Z_LEVEL - (int)round(A * sin(sincnst*n));
+        last = (int)round(A * sin(sincnst*n));
+        lastforout = Z_LEVEL - last;
         return last;
       } else if (type == 0) {
         last = (int)round(A);
         // last = random( (last<<1) + 1 ) + (128 - last);
-        last = Z_LEVEL - (random( (last<<1) + 1 ) - last);
+        last = (random( (last<<1) + 1 ) - last);
+        lastforout = Z_LEVEL - last;
         return last;
       } else if (type == 2) {
         n = n + 1.0;
@@ -133,14 +135,16 @@ int SignalGenerator::next() {
         integ = integ + 2.0 * M_PI * ff * T_SAMPLE;
         //integ2 = integ2 + 2.0 * M_PI * (2*ff) * T_SAMPLE;
         //last = (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ))  + 128;
-        last = Z_LEVEL - ( (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ)) );
+        last = ( (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ)) );
+        lastforout = Z_LEVEL - last;
         return last;
       } else if (type == 4) {
         n = n + 1.0;
         if ( ((int)n) % Psize2 == 0 ) {
           A = -A;
         }
-        last = Z_LEVEL - (int)round(A);
+        last = (int)round(A);
+        lastforout = Z_LEVEL - last;
         return last;
       }
 }

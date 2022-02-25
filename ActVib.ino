@@ -143,8 +143,10 @@ float xerr = 0.0;  // Error signal for the control algorithm (corresponds to the
 float xref = 0.0;  // Reference signal for the control algorithm (corresponds to the reading of the ref. accelerometer).
 float xreff = 0.0;  // xref - (feedback filter output). This signal is the input for the control algorithm.
 int dclevel = 0;
+float maxamplevel = 0.0;
 int satlevel = 0;
 int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the DAC output. 
+int senddataaux = 0;
 float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.
 unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
 
@@ -375,7 +377,10 @@ void AuxTask(void * parameter){
 
             // Generator outputs:
             for (int id = 0; id < 4; id++) {
-                if (siggen[id].enabled) { writeOutput(id,siggen[id].next()); }
+                if (siggen[id].enabled) { 
+                  siggen[id].next();
+                  writeOutput(id,siggen[id].lastforout); 
+                }
                 else { writeOutput(id,0); }
             }
 
@@ -414,7 +419,8 @@ void AuxTask(void * parameter){
             controlqueue.clear();
 
             // Writing outputs:
-            writeOutput(canalperturb,siggen[canalperturb].next());
+            siggen[canalperturb].next();
+            writeOutput(canalperturb,siggen[canalperturb].lastforout);
             writeOutput(canalcontrole,outputaux);
 
             // Read sensors from bus I2C-1, filter readings for DC removal, 
@@ -594,7 +600,7 @@ void MainTask(void * parameter){
             // Signal Generators:
             for (int id = 0; id < 4; id++) {
                 if (id < 2) {
-                  tdata.data[ctt++] = (siggen[id].last >> 8) & 0x0F;
+                  tdata.data[ctt++] = (siggen[id].last >> 8) & 0xFF;
                   tdata.data[ctt++] = siggen[id].last & 0xFF;
                 } else {
                   tdata.data[ctt++] = siggen[id].last;
@@ -726,7 +732,8 @@ void MainTask(void * parameter){
                 tafxnlms.filter(xreff,filtfbk.y);
                 lastout = tafxnlms.y;
               } 
-              outputaux = dclevel - ((int)round(lastout));
+              senddataaux = ((int)round( maxamplevel * lastout ));
+              outputaux = dclevel - senddataaux;
               if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
               else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
               // else { ctrlflags = 0; } 
@@ -745,10 +752,10 @@ void MainTask(void * parameter){
           tdata.data[ctt++] = 0xF;
           tdata.data[ctt++] = 0xF;
           tdata.data[ctt++] = 0xF;
-          tdata.data[ctt++] = siggen[canalperturb].last >> 8;
+          tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
           tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
-          tdata.data[ctt++] = outputaux >> 8;
-          tdata.data[ctt++] = outputaux & 0xFF;
+          tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
+          tdata.data[ctt++] = senddataaux & 0xFF;
           *(float *) &tdata.data[ctt] = xref;
           ctt = ctt + 4;
           *(float *) &tdata.data[ctt] = xerr;
@@ -823,6 +830,7 @@ void MainTask(void * parameter){
               lastout = 0;
               // TODO: check the following
               dclevel = siggen[canalcontrole].Z_LEVEL;
+              maxamplevel = (float)(dclevel-1);
               satlevel = dclevel * 2 - 1;
               outputaux = dclevel;
               xEventGroupClearBits(xEventGroup,0x03);

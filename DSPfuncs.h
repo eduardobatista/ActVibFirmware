@@ -41,6 +41,7 @@
 
         public:
             int last;
+            int lastforout;
             bool enabled;
             int Z_LEVEL;
             SignalGenerator(float fsampling, float tsampling, int stdzlevel);

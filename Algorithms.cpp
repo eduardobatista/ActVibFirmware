@@ -84,7 +84,7 @@ void FxNLMS::update(float en) {
     }
     aux = mu * (en / normterm);
     for (int k = 0; k < N; k++) {
-    *(w+k) = *(w+k) + aux * *(xsec+((ptr-k+N)%N));
+    *(w+k) = *(w+k) - aux * *(xsec+((ptr-k+N)%N));
     }
 }
 
@@ -149,7 +149,7 @@ void TAFxNLMS::update(float en) {
     }
     aux = mu * (en / normterm);
     for (int k = 0; k < N; k++) {
-    *(w+k) = *(w+k) + aux * *(xsec+((ptr-k+N)%N));
-    *(w2+k) = *(w2+k) + aux * *(xsec2+((ptr-k+N)%N));
+    *(w+k) = *(w+k) - aux * *(xsec+((ptr-k+N)%N));
+    *(w2+k) = *(w2+k) - aux * *(xsec2+((ptr-k+N)%N));
     }
 }
