@@ -833,6 +833,7 @@ void MainTask(void * parameter){
               maxamplevel = (float)(dclevel-1);
               satlevel = dclevel * 2 - 1;
               outputaux = dclevel;
+              senddataaux = 0;
               xEventGroupClearBits(xEventGroup,0x03);
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
