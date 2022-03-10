@@ -29,6 +29,8 @@
 #include "SparkFunLSM6DS3.h"
 #include "stdint.h"
 
+#define GtoMS2 9.80665 
+
 //****************************************************************************//
 //
 //  LSM6DS3Core functions.
@@ -681,7 +683,7 @@ float LSM6DS3::readFloatAccelZ(void) {
 }
 
 float LSM6DS3::calcAccel(int16_t input) {
-    float output = (float)input * 0.061 * (settings.accelRange >> 1) / 1000;
+    float output = (float)input * 0.061 * GtoMS2 * (settings.accelRange >> 1) / 1000;
     return output;
 }
 

@@ -1,6 +1,6 @@
 #include <Wire.h>         // I2C
 #include <SPI.h>
-#include <Ticker.h>       // Timing
+// #include <Ticker.h>       // Timing
 #include <Preferences.h>  // Allows recording preferences in non-volatile memory
 #include <math.h>         // Math
 
@@ -131,6 +131,7 @@ bool controlling = false; // Flag for control mode on or off
 bool algOn = false; // Flag indicating wheter the control algorithm is on or off
 
 // Control parameters:
+uint8_t ctrltask = 0;  // 0 for Control, 1 for Path Modeling
 uint8_t algchoice = 0;  // 0 = FxNLMS is used for control, 2 = TAFxNLMS is used.
 uint8_t idRefIMU = 0;
 uint8_t idRefIMUSensor = 0; 
@@ -419,9 +420,16 @@ void AuxTask(void * parameter){
             controlqueue.clear();
 
             // Writing outputs:
-            siggen[canalperturb].next();
-            writeOutput(canalperturb,siggen[canalperturb].lastforout);
-            writeOutput(canalcontrole,outputaux);
+            if (ctrltask == 0) {  // If controlling:       
+              // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
+              writeOutput(canalperturb,siggen[canalperturb].lastforout);
+              writeOutput(canalcontrole,outputaux);
+            } else {  // If path modeling:
+              // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
+              writeOutput(canalperturb,siggen[canalperturb].Z_LEVEL);
+              writeOutput(canalcontrole,siggen[canalcontrole].lastforout);
+            }
+            
 
             // Read sensors from bus I2C-1, filter readings for DC removal, 
             // put readings at controlqueue.
@@ -442,7 +450,7 @@ void AuxTask(void * parameter){
 
             // Notifies TASK 1:
             // xTaskNotify(writing1, 0, eNoAction);
-            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to start MainTask
+            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
 
             // timecounter2 = ESP.getCycleCount() - timecounter2;
             tcount2queue.push(ESP.getCycleCount()); 
@@ -707,40 +715,50 @@ void MainTask(void * parameter){
           } 
 
 
-          if (algOn) { 
-            if (algchoice == 0) {
-              fxnlms.update(xerr);        
-            } else if (algchoice == 2) {
-              tafxnlms.update(xerr);
-            }
-          }
-          
-          xreff = xref - filtfbk.filter(lastout);
-          
-          // if (algchoice == 0) {
-          //   fxnlms.filter(xreff);
-          //   lastout = fxnlms.y;
-          // } else if (algchoice == 2) {
-          //   tafxnlms.filter(xreff,filtfbk.y);
-          //   lastout = tafxnlms.y;
-          // } 
-          // if (algOn) { 
+          if (ctrltask == 1) {
+
+            siggen[canalcontrole].next();
+
+          } else {
+
+            siggen[canalperturb].next();
+
+            if (algOn) { 
               if (algchoice == 0) {
-                fxnlms.filter(xreff);
-                lastout = fxnlms.y;
+                fxnlms.update(xerr);        
               } else if (algchoice == 2) {
-                tafxnlms.filter(xreff,filtfbk.y);
-                lastout = tafxnlms.y;
-              } 
-              senddataaux = ((int)round( maxamplevel * lastout ));
-              outputaux = dclevel - senddataaux;
-              if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
-              else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
-              // else { ctrlflags = 0; } 
-          // } else {
-          //     outputaux = dclevel;
-          //     // ctrlflags = 0;
-          // }
+                tafxnlms.update(xerr);
+              }
+            }
+            
+            xreff = xref - filtfbk.filter(lastout);
+            
+            // if (algchoice == 0) {
+            //   fxnlms.filter(xreff);
+            //   lastout = fxnlms.y;
+            // } else if (algchoice == 2) {
+            //   tafxnlms.filter(xreff,filtfbk.y);
+            //   lastout = tafxnlms.y;
+            // } 
+            if (algOn) { 
+                if (algchoice == 0) {
+                  fxnlms.filter(xreff);
+                  lastout = fxnlms.y;
+                } else if (algchoice == 2) {
+                  tafxnlms.filter(xreff,filtfbk.y);
+                  lastout = tafxnlms.y;
+                } 
+                senddataaux = ((int)round( maxamplevel * lastout ));
+                outputaux = dclevel - senddataaux;
+                if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
+                else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+                // else { ctrlflags = 0; } 
+            } else {
+                outputaux = dclevel;
+                // ctrlflags = 0;
+            }
+
+          }
 
           // writeOutput(canalperturb,siggen[canalperturb].next());
           // writeOutput(canalcontrole,outputaux);
@@ -752,10 +770,17 @@ void MainTask(void * parameter){
           tdata.data[ctt++] = 0xF;
           tdata.data[ctt++] = 0xF;
           tdata.data[ctt++] = 0xF;
-          tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
-          tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
-          tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
-          tdata.data[ctt++] = senddataaux & 0xFF;
+          if (ctrltask == 0) {
+            tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
+            tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
+            tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
+            tdata.data[ctt++] = senddataaux & 0xFF;
+          } else {
+            tdata.data[ctt++] = 0;
+            tdata.data[ctt++] = 0;
+            tdata.data[ctt++] = (siggen[canalcontrole].last >> 8) & 0xFF;
+            tdata.data[ctt++] = siggen[canalcontrole].last & 0xFF;
+          }
           *(float *) &tdata.data[ctt] = xref;
           ctt = ctt + 4;
           *(float *) &tdata.data[ctt] = xerr;
@@ -1116,8 +1141,8 @@ void MainTask(void * parameter){
 
 
           case '!':
-            if (Serial.available() >= 14) {
-              Serial.readBytes(cbuf,14);          
+            if (Serial.available() >= 15) {
+              Serial.readBytes(cbuf,15);          
               canalcontrole = cbuf[0] & 0x0F;
               canalperturb = (cbuf[0] >> 4) & 0x0F;
               idRefIMU = (cbuf[1] >> 4) & 0x0F;
@@ -1138,7 +1163,8 @@ void MainTask(void * parameter){
                   *(float *) &cbuf[10]
                 );
               }
-              delayMicroseconds(100);
+              ctrltask = cbuf[14];
+              delayMicroseconds(50);
               Serial.print("ok!");
               algOn = false;
               hascmd = 0;
