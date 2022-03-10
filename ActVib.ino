@@ -740,7 +740,7 @@ void MainTask(void * parameter){
             //   tafxnlms.filter(xreff,filtfbk.y);
             //   lastout = tafxnlms.y;
             // } 
-            if (algOn) { 
+            // if (algOn) { 
                 if (algchoice == 0) {
                   fxnlms.filter(xreff);
                   lastout = fxnlms.y;
@@ -753,10 +753,10 @@ void MainTask(void * parameter){
                 if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
                 else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
                 // else { ctrlflags = 0; } 
-            } else {
-                outputaux = dclevel;
-                // ctrlflags = 0;
-            }
+            // } else {
+            //     outputaux = dclevel;
+            //     // ctrlflags = 0;
+            // }
 
           }
 
