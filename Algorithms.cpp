@@ -91,7 +91,7 @@ void FxNLMS::update(float en) {
 
 // TAFxNLMS algorithm: -----------------------------------------------
 
-TAFxNLMS::TAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2) {
+CVAFxNLMS::CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2) {
     N = mem;
     mu = 0.25;
     fi = 1e-4;
@@ -106,14 +106,14 @@ TAFxNLMS::TAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float 
     reset();
 }
 
-void TAFxNLMS::setParameters(int mem, float muu, float fii) {
+void CVAFxNLMS::setParameters(int mem, float muu, float fii) {
     N = mem;
     mu = muu;
     fi = fii;
     reset();
 }
 
-void TAFxNLMS::reset() {
+void CVAFxNLMS::reset() {
     for (int k = 0; k < N; k++) {
     *(x+k) = 0;
     *(x2+k) = 0;
@@ -126,7 +126,7 @@ void TAFxNLMS::reset() {
     ptr = N-1;
 }
 
-float TAFxNLMS::filter(float xn,float xn2) {      
+float CVAFxNLMS::filter(float xn,float xn2) {      
     ptr++;
     if (ptr >= N) { ptr = 0; }
     *(xsec+ptr) = (*filtsec).filter(xn);
@@ -140,7 +140,7 @@ float TAFxNLMS::filter(float xn,float xn2) {
     return y;
 }
 
-void TAFxNLMS::update(float en) {
+void CVAFxNLMS::update(float en) {
     normterm = fi;
     for (int k = 0; k < N; k++) {
     aux = *(xsec+k);

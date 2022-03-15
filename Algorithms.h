@@ -51,7 +51,7 @@ class FxNLMS {
 
 
 
-class TAFxNLMS {
+class CVAFxNLMS {
     
     private:
         int ptr = 0;
@@ -72,7 +72,7 @@ class TAFxNLMS {
         FIRFilter *filtsec2;
         float normterm;
         float aux,aux2;
-        TAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2);
+        CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2);
         void setParameters(int mem, float muu, float fii);
         void reset();
         float filter(float xn,float xn2);

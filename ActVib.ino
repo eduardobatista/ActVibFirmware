@@ -107,7 +107,7 @@ float xsec2[3000];
 FIRFilter filtsec2 = FIRFilter(1,&wsec[0],&xsec2[0]); // Same coef. vector as filtsec, since filtsec and filtsec are never used together.
 
 /*
-   In the following, we have definitions of the active vibration control algorithms: FxNLMS and the propose TAFxNLMS 
+   In the following, we have definitions of the active vibration control algorithms: FxNLMS and the proposed CVAFxNLMS 
 */
 float wa[1000];
 float xa[1000];
@@ -116,7 +116,7 @@ FxNLMS fxnlms = FxNLMS(100,&wa[0],&xa[0],&xasec[0],&filtsec);
 float wa2[1000];
 float xa2[1000];
 float xasec2[1000];
-TAFxNLMS tafxnlms = TAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2);
+CVAFxNLMS cvafxnlms = CVAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2);
 
 // Four signal generators defined below, since we have four output channels.
 SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGenerator(F_SAMPLE,T_SAMPLE,2048),
@@ -132,7 +132,7 @@ bool algOn = false; // Flag indicating wheter the control algorithm is on or off
 
 // Control parameters:
 uint8_t ctrltask = 0;  // 0 for Control, 1 for Path Modeling
-uint8_t algchoice = 0;  // 0 = FxNLMS is used for control, 2 = TAFxNLMS is used.
+uint8_t algchoice = 0;  // 0 = FxNLMS is used for control, 1 = FxNLMS with full buffers, 2 = CVA-FxNLMS is used, 3 = CVA-FxNLMS with full buffers.
 uint8_t idRefIMU = 0;
 uint8_t idRefIMUSensor = 0; 
 uint8_t idErrIMU = 1;
@@ -723,45 +723,58 @@ void MainTask(void * parameter){
 
             siggen[canalperturb].next();
 
-            if (algOn) { 
-              if (algchoice == 0) {
-                fxnlms.update(xerr);        
-              } else if (algchoice == 2) {
-                tafxnlms.update(xerr);
-              }
-            }
+            // if (algOn) { 
+            //   if ( (algchoice == 0) || (algchoice == 1) ) {
+            //     fxnlms.update(xerr);        
+            //   } else if ( (algchoice == 2) || (algchoice == 3) ) {
+            //     tafxnlms.update(xerr);
+            //   }
+            // }
             
             xreff = xref - filtfbk.filter(lastout);
             
-            // if (algchoice == 0) {
-            //   fxnlms.filter(xreff);
-            //   lastout = fxnlms.y;
-            // } else if (algchoice == 2) {
-            //   tafxnlms.filter(xreff,filtfbk.y);
-            //   lastout = tafxnlms.y;
-            // } 
-            // if (algOn) { 
-                if (algchoice == 0) {
+            switch (algchoice) {
+
+              case 0:
+                if (algOn) {
+                  fxnlms.update(xerr);
                   fxnlms.filter(xreff);
                   lastout = fxnlms.y;
-                } else if (algchoice == 2) {
-                  tafxnlms.filter(xreff,filtfbk.y);
-                  lastout = tafxnlms.y;
-                } 
-                senddataaux = ((int)round( maxamplevel * lastout ));
-                outputaux = dclevel - senddataaux;
-                if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
-                else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
-                // else { ctrlflags = 0; } 
-            // } else {
-            //     outputaux = dclevel;
-            //     // ctrlflags = 0;
-            // }
+                }
+                break;
+            
+              case 1:
+                if (algOn) { fxnlms.update(xerr); }
+                fxnlms.filter(xreff);
+                lastout = fxnlms.y;
+                break;
+
+              case 2:
+                if (algOn) {
+                  cvafxnlms.update(xerr);
+                  cvafxnlms.filter(xreff,filtfbk.y);
+                  lastout = cvafxnlms.y;
+                }
+                break;
+            
+              case 3:
+                if (algOn) { cvafxnlms.update(xerr); }
+                cvafxnlms.filter(xreff,filtfbk.y);
+                lastout = cvafxnlms.y;
+                break;
+            
+              default:
+                lastout = 0;
+                break;
+                
+            }
+
+            senddataaux = ((int)round( maxamplevel * lastout ));
+            outputaux = dclevel - senddataaux;
+            if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
+            else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
 
           }
-
-          // writeOutput(canalperturb,siggen[canalperturb].next());
-          // writeOutput(canalcontrole,outputaux);
           
           // Sending data to the host computer: --------------------------
           // The first three bytes are used for synchronization. 
@@ -847,8 +860,8 @@ void MainTask(void * parameter){
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(1.0); }
               dcr[0].reset();
               dcr[1].reset();
-              if (algchoice == 0) { fxnlms.reset(); }
-              else if (algchoice == 2) { tafxnlms.reset(); }
+              if ((algchoice == 0) || (algchoice == 1)) { fxnlms.reset(); }
+              else if ((algchoice == 2) || (algchoice == 3)) { cvafxnlms.reset(); }
               filtsec.reset();
               filtsec2.reset();
               filtfbk.reset();
@@ -1128,12 +1141,12 @@ void MainTask(void * parameter){
               hascmd = 0;
               cthascmd = 0;
               Serial.readBytes(cbuf,8);
-              if (algchoice == 0) { // FxNLMS
+              if ((algchoice == 0) || (algchoice == 1)) { // FxNLMS
                 fxnlms.mu = *(float *) &cbuf[0];
                 fxnlms.fi = *(float *) &cbuf[4];
-              } else if (algchoice == 2) { // TAFxNLMS
-                tafxnlms.mu = *(float *) &cbuf[0];
-                tafxnlms.fi = *(float *) &cbuf[4];
+              } else if ((algchoice == 2) || (algchoice == 3)) { // TAFxNLMS
+                cvafxnlms.mu = *(float *) &cbuf[0];
+                cvafxnlms.fi = *(float *) &cbuf[4];
               }
               algOn = true;
             }
@@ -1150,14 +1163,14 @@ void MainTask(void * parameter){
               idErrIMU = (cbuf[2] >> 4) & 0x0F;
               idErrIMUSensor = (cbuf[2] & 0x0F);
               algchoice = cbuf[3];
-              if (algchoice == 0) { // FxNLMS
+              if ((algchoice == 0) || (algchoice == 1)) { // FxNLMS
                 fxnlms.setParameters(
                   (((int)cbuf[4]) << 8) + (int)cbuf[5],
                   *(float *) &cbuf[6],
                   *(float *) &cbuf[10]
                 );
-              } else if (algchoice == 2) { // TAFxNLMS
-                tafxnlms.setParameters(
+              } else if ((algchoice == 2) || (algchoice == 3)) { // TAFxNLMS
+                cvafxnlms.setParameters(
                   (((int)cbuf[4]) << 8) + (int)cbuf[5],
                   *(float *) &cbuf[6],
                   *(float *) &cbuf[10]
