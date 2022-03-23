@@ -4,6 +4,8 @@
 #include <Preferences.h>  // Allows recording preferences in non-volatile memory
 #include <math.h>         // Math
 
+#include <SPIFFS.h>
+
 #include "DSPfuncs.h"
 #include "Algorithms.h"
 #include "Queue.h"
@@ -291,16 +293,36 @@ void getPaths() {
     are sent to the ESP32 from the host computer.
 */
 void loadFlashData() {
-  prefs.begin("AlgData");
-  Nsec = prefs.getInt("AlgData");
-  Nfbk = prefs.getInt("AlgData");
-  prefs.getBytes("AlgData",&wsec[0],Nsec*sizeof(float));
-  prefs.getBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
-  prefs.end();
-  filtsec.setMem(Nsec);
-  filtsec2.setMem(Nsec);
-  filtfbk.setMem(Nfbk);
-  Serial.println("Flash data loaded...");
+  // prefs.begin("AlgData");
+  // Nsec = prefs.getInt("AlgData");
+  // Nfbk = prefs.getInt("AlgData");
+  // prefs.getBytes("AlgData",&wsec[0],Nsec*sizeof(float));
+  // prefs.getBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
+  // prefs.end();
+  // filtsec.setMem(Nsec);
+  // filtsec2.setMem(Nsec);
+  // filtfbk.setMem(Nfbk);
+  // Serial.println("Flash data loaded...");
+  File file = SPIFFS.open("/wsec.dat",FILE_READ);
+  if (!file) {
+    Serial.println("Secondary path file not found in memory.");
+  } else {
+    Nsec = (int)(file.size() / sizeof(float));
+    file.read((uint8_t *)&wsec[0],file.size());
+    Serial.println("Success reading wsec.");
+    Serial.println(Nsec);
+    file.close();
+  }
+  file = SPIFFS.open("/wfbk.dat",FILE_READ);
+  if (!file) {
+    Serial.println("Feedback path file not found in memory.");
+  } else {
+    Nfbk = (int)(file.size() / sizeof(float));
+    file.read((uint8_t *)&wfbk[0],file.size());
+    Serial.println("Success reading wfbk.");
+    Serial.println(Nfbk);
+    file.close();
+  }
 }
 
 /*
@@ -412,7 +434,7 @@ void AuxTask(void * parameter){
             // Blocks until reaching the time for next sample: --------------------------------------------
             vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
             // --------------------------------------------------------------------------------------------
-            uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
+            // uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
 
             tcount2queue.clear();
             tcount2queue.push(ESP.getCycleCount()); 
@@ -429,7 +451,8 @@ void AuxTask(void * parameter){
               writeOutput(canalperturb,siggen[canalperturb].Z_LEVEL);
               writeOutput(canalcontrole,siggen[canalcontrole].lastforout);
             }
-            
+
+            uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask            
 
             // Read sensors from bus I2C-1, filter readings for DC removal, 
             // put readings at controlqueue.
@@ -664,6 +687,12 @@ void MainTask(void * parameter){
           // --------------------------------------------------------------------------------------------
           // xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
 
+          if (ctrltask == 1) {
+            siggen[canalcontrole].next();
+          } else {
+            siggen[canalperturb].next();
+          } 
+
           errorflags = 0;
           // Clear bits from EventGroup to wait for notifications/flags from AuxTask
           uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
@@ -715,13 +744,7 @@ void MainTask(void * parameter){
           } 
 
 
-          if (ctrltask == 1) {
-
-            siggen[canalcontrole].next();
-
-          } else {
-
-            siggen[canalperturb].next();
+          if (ctrltask == 0) {
 
             // if (algOn) { 
             //   if ( (algchoice == 0) || (algchoice == 1) ) {
@@ -744,9 +767,11 @@ void MainTask(void * parameter){
                 break;
             
               case 1:
-                if (algOn) { fxnlms.update(xerr); }
-                fxnlms.filter(xreff);
-                lastout = fxnlms.y;
+                if (algOn) { 
+                  fxnlms.filter(xreff);
+                  fxnlms.update(xerr);                  
+                  lastout = fxnlms.y;
+                }
                 break;
 
               case 2:
@@ -758,9 +783,11 @@ void MainTask(void * parameter){
                 break;
             
               case 3:
-                if (algOn) { cvafxnlms.update(xerr); }
-                cvafxnlms.filter(xreff,filtfbk.y);
-                lastout = cvafxnlms.y;
+                if (algOn) {
+                  cvafxnlms.filter(xreff,filtfbk.y);
+                  cvafxnlms.update(xerr);                  
+                  lastout = cvafxnlms.y;
+                }
                 break;
             
               default:
@@ -856,7 +883,7 @@ void MainTask(void * parameter){
             break;
 
           case 'S': 
-            if (!reading) {
+            if (!reading) { 
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(1.0); }
               dcr[0].reset();
               dcr[1].reset();
@@ -897,13 +924,46 @@ void MainTask(void * parameter){
 
           case 'P':
             if (!reading && !controlling) {
-              prefs.begin("AlgData");
-              prefs.putInt("AlgData",Nsec);
-              prefs.putInt("AlgData",Nfbk);
-              prefs.putBytes("AlgData",&wsec[0],Nsec*sizeof(float));
-              prefs.putBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
-              prefs.end();
-              Serial.print("ok!");
+              // prefs.begin("AlgData");
+              // prefs.putInt("AlgData",Nsec);
+              // prefs.putInt("AlgData",Nfbk);
+              // prefs.putBytes("AlgData",&wsec[0],Nsec*sizeof(float));
+              // prefs.putBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
+              // prefs.end();
+              bool flagok = true;
+              File file = SPIFFS.open("/wsec.dat",FILE_WRITE);
+              if(!file){ 
+                Serial.print("er0"); 
+                flagok = false;
+              } else {
+                file.write((uint8_t *)&wsec[0],Nsec*sizeof(float));
+                file.close();
+              } 
+              if (flagok) {
+                file = SPIFFS.open("/wfbk.dat",FILE_WRITE);
+                if(!file){ 
+                  Serial.print("er1"); 
+                  flagok = false;
+                } else {
+                  file.write((uint8_t *)&wfbk[0],Nfbk*sizeof(float));
+                  file.close();
+                }              
+                Serial.print("ok!");
+              }              
+            }
+            break;
+
+          case 'c':
+            if (!reading && !controlling) {
+              Serial.println("WSec = ");
+              for (int nn = 0; nn < Nsec; nn++) {
+                Serial.println(wsec[nn],10);
+              } 
+              Serial.println("WFbk = ");
+              for (int nn = 0; nn < Nsec; nn++) {
+                Serial.println(wfbk[nn],10);
+              }
+              Serial.println("End!");
             }
             break;
 
@@ -1209,6 +1269,13 @@ void setup() {
 
   adc11.begin();
   adc10.begin();
+
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS.");
+  } else {
+    Serial.println("SPIFFS successfully mounted!");
+    Serial.println( SPIFFS.totalBytes());
+  }
 
   WireA.begin();
   WireA.setClock(1000000L);
