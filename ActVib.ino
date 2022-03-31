@@ -114,11 +114,13 @@ FIRFilter filtsec2 = FIRFilter(1,&wsec[0],&xsec2[0]); // Same coef. vector as fi
 float wa[1000];
 float xa[1000];
 float xasec[1000];
-FxNLMS fxnlms = FxNLMS(100,&wa[0],&xa[0],&xasec[0],&filtsec);
+float deltawa[1000];
+FxNLMS fxnlms = FxNLMS(100,&wa[0],&xa[0],&xasec[0],&filtsec,&deltawa[0]);
 float wa2[1000];
 float xa2[1000];
 float xasec2[1000];
-CVAFxNLMS cvafxnlms = CVAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2);
+float deltawa2[1000];
+CVAFxNLMS cvafxnlms = CVAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2, &deltawa[0], &deltawa2[0]);
 
 // Four signal generators defined below, since we have four output channels.
 SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGenerator(F_SAMPLE,T_SAMPLE,2048),
@@ -134,7 +136,10 @@ bool algOn = false; // Flag indicating wheter the control algorithm is on or off
 
 // Control parameters:
 uint8_t ctrltask = 0;  // 0 for Control, 1 for Path Modeling
+bool debugmode = false; // true for enabling the Debug Mode (mechanical system is simulated at the software).
+bool nextdebugstep = false;  // helps controlling the debug mode
 uint8_t algchoice = 0;  // 0 = FxNLMS is used for control, 1 = FxNLMS with full buffers, 2 = CVA-FxNLMS is used, 3 = CVA-FxNLMS with full buffers.
+uint32_t memsize = 100;
 uint8_t idRefIMU = 0;
 uint8_t idRefIMUSensor = 0; 
 uint8_t idErrIMU = 1;
@@ -150,7 +155,8 @@ float maxamplevel = 0.0;
 int satlevel = 0;
 int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the DAC output. 
 int senddataaux = 0;
-float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.
+int lastsenddataaux = 0;
+float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.7
 unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
 
 unsigned char cbuf[BUF_SIZE];  // Buffer for storing the byte values before sending them to the host computer.  
@@ -163,15 +169,20 @@ uint8_t cbuf2[20]; // Stores temporary data from commmunication buses.
     id = 2 -> GPIO25 (Eletroimã 3 - 8 bits)
     id = 3 -> GPIO26 (Eletroimã 4  - 8 bits)
 */
-void writeOutput(int id,int val) {
+void writeOutput(int id,int val) {    
     if (id < 2) {
       mcps[id].setValue(val & 0x0FFF);
     } else {
       // Output pins are 25 and 26, for ids equals to 2 and 3 respetively:
       dacWrite(23+id, val & 0xFF);
-    }    
+    }
 }
 
+void writeOutputDebug(int id,int val) {    
+    // Serial.write(id);
+    Serial.write((val >> 8) & 0xFF);
+    Serial.write(val & 0xFF);
+}
 
 /*
     Initialization of IMU, involving definitions and connection check.
@@ -269,9 +280,12 @@ void getPaths() {
     if (type == 's') { 
       tptr = (unsigned char *) wsec; 
       Nsec = nbytes >> 2;
+      filtsec.setMem(Nsec);
+      filtsec2.setMem(Nsec);
     } else if (type == 'f') {
       tptr = (unsigned char *) wfbk; 
       Nfbk = nbytes >> 2;
+      filtfbk.setMem(Nfbk);
     }
     Serial.write('k');
     ct = 0;
@@ -312,6 +326,8 @@ void loadFlashData() {
     Serial.println("Success reading wsec.");
     Serial.println(Nsec);
     file.close();
+    filtsec.setMem(Nsec);
+    filtsec2.setMem(Nsec);  
   }
   file = SPIFFS.open("/wfbk.dat",FILE_READ);
   if (!file) {
@@ -322,6 +338,7 @@ void loadFlashData() {
     Serial.println("Success reading wfbk.");
     Serial.println(Nfbk);
     file.close();
+    filtfbk.setMem(Nfbk);
   }
 }
 
@@ -429,7 +446,7 @@ void AuxTask(void * parameter){
             if (cttcycle == CTTRatio) { cttcycle = 0; }
 
             
-        } else if (controlling) {  // If Control Mode is on:
+        } else if (controlling && !debugmode) {  // If Control Mode is on:
 
             // Blocks until reaching the time for next sample: --------------------------------------------
             vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
@@ -470,13 +487,17 @@ void AuxTask(void * parameter){
                 controlqueue.push(dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor)));
               }
             }
-
+            
             // Notifies TASK 1:
             // xTaskNotify(writing1, 0, eNoAction);
             uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
 
             // timecounter2 = ESP.getCycleCount() - timecounter2;
             tcount2queue.push(ESP.getCycleCount()); 
+
+        } else if (controlling && debugmode) {
+
+          vTaskDelay((TickType_t)4);
 
         } else {
 
@@ -549,6 +570,9 @@ void MainTask(void * parameter){
   uint8_t ctcycle = 0;
   uint8_t imuidd;
 
+  int32_t xrefdebug = 0;
+  int32_t xerrdebug = 0;
+
   uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
@@ -579,8 +603,7 @@ void MainTask(void * parameter){
 
             timecounter1 = ESP.getCycleCount();
 
-            tdata.nbytes = 0;  
-                    
+            tdata.nbytes = 0;                      
             
             ctt = 0;
             // First 3 bytes for sync:
@@ -687,158 +710,198 @@ void MainTask(void * parameter){
           // --------------------------------------------------------------------------------------------
           // xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
 
-          if (ctrltask == 1) {
-            siggen[canalcontrole].next();
-          } else {
-            siggen[canalperturb].next();
-          } 
+          if (!debugmode) {
 
-          errorflags = 0;
-          // Clear bits from EventGroup to wait for notifications/flags from AuxTask
-          uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
-          // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
-          uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
-          if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }          
-
-          timecounter1 = ESP.getCycleCount();
-
-          if (imubus[idRefIMU] != 0) {
-            if (imutype[idRefIMU] == 0) {
-              xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
+            if (ctrltask == 1) {
+              siggen[canalcontrole].next();
             } else {
-              xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
+              siggen[canalperturb].next();
+            } 
+
+            errorflags = 0;
+            // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+            uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
+            // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }          
+
+            timecounter1 = ESP.getCycleCount();
+
+            if (imubus[idRefIMU] != 0) {
+              if (imutype[idRefIMU] == 0) {
+                xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
+              } else {
+                xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
+              }
             }
-          }
-          if (imubus[idErrIMU] != 0) {
-            if (imutype[idErrIMU] == 0) {
-              xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
-            } else {
-              xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
-            }            
-          }
-
-          timecounter1a = ESP.getCycleCount() - timecounter1;
-
-          // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
-          // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
-
-          // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
-          uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
-          if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
-
-          if (imubus[idRefIMU] == 0) {
-            if (controlqueue.count() == 0) { 
-              errorflags = errorflags | 0x08;
-              xref = 0;
-            } else {
-              xref = controlqueue.pop();
-            }            
-          } 
-          if (imubus[idErrIMU] == 0) {
-            if (controlqueue.count() == 0) { 
-              errorflags = errorflags | 0x10;
-              xerr = 0;
-            } else {
-              xerr = controlqueue.pop();
-            }          
-          } 
-
-
-          if (ctrltask == 0) {
-
-            // if (algOn) { 
-            //   if ( (algchoice == 0) || (algchoice == 1) ) {
-            //     fxnlms.update(xerr);        
-            //   } else if ( (algchoice == 2) || (algchoice == 3) ) {
-            //     tafxnlms.update(xerr);
-            //   }
-            // }
-            
-            xreff = xref - filtfbk.filter(lastout);
-            
-            switch (algchoice) {
-
-              case 0:
-                if (algOn) {
-                  fxnlms.update(xerr);
-                  fxnlms.filter(xreff);
-                  lastout = fxnlms.y;
-                }
-                break;
-            
-              case 1:
-                if (algOn) { 
-                  fxnlms.filter(xreff);
-                  fxnlms.update(xerr);                  
-                  lastout = fxnlms.y;
-                }
-                break;
-
-              case 2:
-                if (algOn) {
-                  cvafxnlms.update(xerr);
-                  cvafxnlms.filter(xreff,filtfbk.y);
-                  lastout = cvafxnlms.y;
-                }
-                break;
-            
-              case 3:
-                if (algOn) {
-                  cvafxnlms.filter(xreff,filtfbk.y);
-                  cvafxnlms.update(xerr);                  
-                  lastout = cvafxnlms.y;
-                }
-                break;
-            
-              default:
-                lastout = 0;
-                break;
-                
+            if (imubus[idErrIMU] != 0) {
+              if (imutype[idErrIMU] == 0) {
+                xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
+              } else {
+                xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
+              }            
             }
 
-            senddataaux = ((int)round( maxamplevel * lastout ));
-            outputaux = dclevel - senddataaux;
-            if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
-            else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+            timecounter1a = ESP.getCycleCount() - timecounter1;
+
+            // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
+            // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
+
+            // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
+            if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; }
+
+            if (imubus[idRefIMU] == 0) {
+              if (controlqueue.count() == 0) { 
+                errorflags = errorflags | 0x08;
+                xref = 0;
+              } else {
+                xref = controlqueue.pop();
+              }            
+            } 
+            if (imubus[idErrIMU] == 0) {
+              if (controlqueue.count() == 0) { 
+                errorflags = errorflags | 0x10;
+                xerr = 0;
+              } else {
+                xerr = controlqueue.pop();
+              }          
+            } 
 
           }
           
-          // Sending data to the host computer: --------------------------
-          // The first three bytes are used for synchronization. 
-          // Syncronization needs to be improved, but it is working fine.            
-          ctt = 0;
-          tdata.data[ctt++] = 0xF;
-          tdata.data[ctt++] = 0xF;
-          tdata.data[ctt++] = 0xF;
-          if (ctrltask == 0) {
-            tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
-            tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
-            tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
-            tdata.data[ctt++] = senddataaux & 0xFF;
-          } else {
-            tdata.data[ctt++] = 0;
-            tdata.data[ctt++] = 0;
-            tdata.data[ctt++] = (siggen[canalcontrole].last >> 8) & 0xFF;
-            tdata.data[ctt++] = siggen[canalcontrole].last & 0xFF;
+          if (nextdebugstep) {
+
+            errorflags = 0;
+
+            if (ctrltask == 1) {
+              siggen[canalcontrole].next();
+            } else {
+              siggen[canalperturb].next();
+            } 
+
+            // delayMicroseconds(1000);
+
+            // Writing outputs:
+            if (ctrltask == 0) {  // If controlling:       
+              // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
+              writeOutputDebug(canalperturb,siggen[canalperturb].lastforout);
+              writeOutputDebug(canalcontrole,outputaux);
+            } else {  // If path modeling:
+              // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
+              writeOutputDebug(canalperturb,siggen[canalperturb].Z_LEVEL);
+              writeOutputDebug(canalcontrole,siggen[canalcontrole].lastforout);
+            }
+            
           }
-          *(float *) &tdata.data[ctt] = xref;
-          ctt = ctt + 4;
-          *(float *) &tdata.data[ctt] = xerr;
-          ctt = ctt + 4;
-          tdata.data[ctt++] = ctrlflags;
-          timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
-          tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
-          tdata.data[ctt++] = timecounter1 & 0xFF;
-          timecounter1a = (timecounter1a >> 4) & 0xFFFF;
-          tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
-          tdata.data[ctt++] = timecounter1a & 0xFF;
-          timecounter2 = tcount2queue.pop();
-          timecounter2 = tcount2queue.pop() - timecounter2;
-          timecounter2 = (timecounter2 >> 4) & 0xFFFF;
-          tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
-          tdata.data[ctt++] = timecounter2 & 0xFF;
-          tdata.data[ctt++] = errorflags;
-          tdata.nbytes = ctt;
+        
+
+          if (!debugmode || nextdebugstep) {
+
+                        
+            if (ctrltask == 0) {           
+              
+
+              switch (algchoice) {
+
+                case 0:
+                  if (algOn) {
+                    xreff = xref - filtfbk.filter(lastout);
+                    fxnlms.updateStep1();
+                    fxnlms.filter(xreff);
+                    fxnlms.updateStep2(xerr);
+                    lastout = fxnlms.y;
+                  }
+                  break;
+              
+                case 1:
+                  if (algOn) { 
+                    xreff = xref - filtfbk.filter(lastout);
+                    fxnlms.filter(xreff);
+                    lastout = fxnlms.y;
+                    fxnlms.update(xerr);
+                  }
+                  break;
+
+                case 2:
+                  if (algOn) {
+                    xreff = xref - filtfbk.filter(lastout);
+                    cvafxnlms.updateStep1();
+                    cvafxnlms.filter(xreff,filtfbk.y);
+                    cvafxnlms.updateStep2(xerr);
+                    lastout = cvafxnlms.y;
+                  }
+                  break;
+              
+                case 3:
+                  if (algOn) {
+                    xreff = xref - filtfbk.filter(lastout);
+                    cvafxnlms.filter(xreff,filtfbk.y);
+                    lastout = cvafxnlms.y;
+                    cvafxnlms.update(xerr);                    
+                  }
+                  break;
+              
+                default:
+                  lastout = 0;
+                  break;
+                  
+              }
+
+              lastsenddataaux = senddataaux;
+              senddataaux = ((int)roundf( maxamplevel * lastout ));
+              outputaux = (dclevel - senddataaux);
+              if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
+              else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+
+            }
+          
+            // Sending data to the host computer: --------------------------
+            // The first three bytes are used for synchronization. 
+            // Syncronization needs to be improved, but it is working fine.            
+            ctt = 0;
+            tdata.data[ctt++] = 0xF;
+            tdata.data[ctt++] = 0xF;
+            tdata.data[ctt++] = 0xF;
+            if (ctrltask == 0) {
+              tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
+              tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
+              // tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
+              // tdata.data[ctt++] = senddataaux & 0xFF;
+              tdata.data[ctt++] = (lastsenddataaux >> 8) & 0xFF;
+              tdata.data[ctt++] = lastsenddataaux & 0xFF;
+            } else {
+              tdata.data[ctt++] = 0;
+              tdata.data[ctt++] = 0;
+              tdata.data[ctt++] = (siggen[canalcontrole].last >> 8) & 0xFF;
+              tdata.data[ctt++] = siggen[canalcontrole].last & 0xFF;
+            }
+            *(float *) &tdata.data[ctt] = xref;
+            ctt = ctt + 4;
+            *(float *) &tdata.data[ctt] = xerr;
+            ctt = ctt + 4;
+            tdata.data[ctt++] = ctrlflags;
+            timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
+            tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
+            tdata.data[ctt++] = timecounter1 & 0xFF;
+            timecounter1a = (timecounter1a >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
+            tdata.data[ctt++] = timecounter1a & 0xFF;
+            if (!debugmode) {
+              timecounter2 = tcount2queue.pop();
+              timecounter2 = tcount2queue.pop() - timecounter2;
+              timecounter2 = (timecounter2 >> 4) & 0xFFFF;
+            } else {
+              timecounter2 = 0;
+            }          
+            tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
+            tdata.data[ctt++] = timecounter2 & 0xFF;
+            tdata.data[ctt++] = errorflags;
+            tdata.nbytes = ctt;
+
+            nextdebugstep = false;         
+
+          }
 
       } else { 
 
@@ -894,8 +957,9 @@ void MainTask(void * parameter){
               filtfbk.reset();
               lastout = 0;
               // TODO: check the following
-              dclevel = siggen[canalcontrole].Z_LEVEL;
+              dclevel = siggen[canalcontrole].Z_LEVEL;              
               maxamplevel = (float)(dclevel-1);
+              // maxamplevel = 1.0;
               satlevel = dclevel * 2 - 1;
               outputaux = dclevel;
               senddataaux = 0;
@@ -905,9 +969,9 @@ void MainTask(void * parameter){
               controlling = true;
               reading = false;
               cttcycle = 0;
+              Serial.write('K');
             }
             break;
-
 
           case 't':
             reading = false; 
@@ -916,20 +980,20 @@ void MainTask(void * parameter){
             flagzeroed = false;
             break;
 
+          case 'T':
+            hascmd = 'T';
+            break;
+
+          case 'N':
+            nextdebugstep = true;          
+            break;
 
           case 'f':            
             hascmd = 'f';
             break;
 
-
           case 'P':
             if (!reading && !controlling) {
-              // prefs.begin("AlgData");
-              // prefs.putInt("AlgData",Nsec);
-              // prefs.putInt("AlgData",Nfbk);
-              // prefs.putBytes("AlgData",&wsec[0],Nsec*sizeof(float));
-              // prefs.putBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
-              // prefs.end();
               bool flagok = true;
               File file = SPIFFS.open("/wsec.dat",FILE_WRITE);
               if(!file){ 
@@ -1081,6 +1145,18 @@ void MainTask(void * parameter){
 
         switch(hascmd) {
 
+          case 'T':
+           if (Serial.available() >= 8) {
+              Serial.readBytes(cbuf,8);
+              xerr = *(float *)&cbuf[0];
+              xref = *(float *)&cbuf[4];
+              delayMicroseconds(200);
+              Serial.write(cbuf,8);
+              cthascmd = 0;
+              hascmd = 0;
+            }
+            break;
+
           case 'f':
             if (Serial.available() > 0) {
               CTTRatio =  Serial.read();
@@ -1141,31 +1217,7 @@ void MainTask(void * parameter){
               adcconfig[2] = Serial.read();  
               adctype = (adcconfig[0] >> 4);
               if ( adctype == 0 ) { adc = &adc11; }
-              else { adc = &adc10; }              
-              // adc->setGain((1 << adcconfig[1]) >> 1);
-              // adc->setDataRate(adcconfig[2]); 
-              // for (int iii = 0; iii < 4; iii++) {
-              //   adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
-              // }            
-              // if ((adcconfig[0] & 0x0F) > 0) {            
-              //   adc->setMode(0);
-              //   nextadc = 0; 
-              //   for (int iii = 0; iii < 4; iii++) {
-              //     while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
-              //     adcseq[iii] = nextadc;
-              //     nextadc = (nextadc+1) & 0x03;
-              //   }  
-              //   nextadc = 0;
-              //   adc->readADC(adcseq[0]);
-              // } else {
-              //   adc->setMode(1);
-              // }             
-              // if (adc->isConnected()) {
-              //   Serial.write("ok");
-              //   Serial.write(&adcseq[0],4);
-              // } else {
-              //   Serial.write("e!");
-              // }        
+              else { adc = &adc10; }        
               flaginitADC = 1;
               while (flaginitADC > 0) { delay(1); }
               if (flaginitADC == 0) {
@@ -1223,20 +1275,26 @@ void MainTask(void * parameter){
               idErrIMU = (cbuf[2] >> 4) & 0x0F;
               idErrIMUSensor = (cbuf[2] & 0x0F);
               algchoice = cbuf[3];
+              memsize = (((int)cbuf[4]) << 8) + (int)cbuf[5];              
               if ((algchoice == 0) || (algchoice == 1)) { // FxNLMS
                 fxnlms.setParameters(
-                  (((int)cbuf[4]) << 8) + (int)cbuf[5],
+                  memsize,
                   *(float *) &cbuf[6],
                   *(float *) &cbuf[10]
                 );
               } else if ((algchoice == 2) || (algchoice == 3)) { // TAFxNLMS
                 cvafxnlms.setParameters(
-                  (((int)cbuf[4]) << 8) + (int)cbuf[5],
+                  memsize,
                   *(float *) &cbuf[6],
                   *(float *) &cbuf[10]
                 );
               }
-              ctrltask = cbuf[14];
+              ctrltask = cbuf[14] & 0x01;
+              if ( ((cbuf[14] >> 1) & 0x01) == 1 ) {
+                debugmode = true;
+              } else {
+                debugmode = false;
+              }
               delayMicroseconds(50);
               Serial.print("ok!");
               algOn = false;
@@ -1258,10 +1316,9 @@ void MainTask(void * parameter){
 // Startup configuration:
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
-  // Serial.begin(115200);
-  // Serial.begin(230400);
-  Serial.begin(500000);
   // Serial.begin(500000);
+  Serial.begin(115200);
+  Serial.setTimeout(1000);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);

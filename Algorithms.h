@@ -32,6 +32,7 @@ class FxNLMS {
         float *x;
         float *xsec;
         float *w;
+        float *deltaw;
         float y;
         float mu;
         float fi;
@@ -40,11 +41,13 @@ class FxNLMS {
         FIRFilter *filtsec;
         float normterm;
         float aux;
-        FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec);
+        FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec, float *deltawa);
         void setParameters(int mem, float muu, float fii);
         void reset();
         float filter(float xn);
         void update(float en);
+        void updateStep1();  
+        void updateStep2(float en); 
 
 };
 
@@ -63,6 +66,8 @@ class CVAFxNLMS {
         float *xsec2;
         float *w;
         float *w2;
+        float *deltaw;
+        float *deltaw2;
         float y;
         float mu;
         float fi;
@@ -72,11 +77,13 @@ class CVAFxNLMS {
         FIRFilter *filtsec2;
         float normterm;
         float aux,aux2;
-        CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2);
+        CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2, float *deltawa, float *deltawa2);
         void setParameters(int mem, float muu, float fii);
         void reset();
         float filter(float xn,float xn2);
         void update(float en);    
+        void updateStep1();  
+        void updateStep2(float en); 
 
 };
 

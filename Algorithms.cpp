@@ -36,11 +36,12 @@ float FIRFilter::filter(float xn) {
 
 // FxNLMS algorithm: -----------------------------------------------
 
-FxNLMS::FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec) {
+FxNLMS::FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec, float *deltawa) {
     N = mem;
     mu = 0.25;
     fi = 1e-4;
     w = wa;
+    deltaw = deltawa;
     x = xa;
     xsec = xasec;
     filtsec = fsec;
@@ -59,6 +60,7 @@ void FxNLMS::reset() {
     *(x+k) = 0;
     *(xsec+k) = 0;
     *(w+k) = 0; 
+    *(deltaw+k) = 0;
     }
     y = 0;
     ptr = N-1;
@@ -88,15 +90,35 @@ void FxNLMS::update(float en) {
     }
 }
 
+void FxNLMS::updateStep1() {
+    normterm = fi;
+    for (int k = 0; k < N; k++) {
+        aux = *(xsec+k);
+        normterm = normterm + aux*aux;
+    }
+    aux = mu / normterm;
+    for (int k = 0; k < N; k++) {
+        *(deltaw+k) = aux * *(xsec+((ptr-k+N)%N));
+    }
+}
+
+void FxNLMS::updateStep2(float en) {
+    for (int k = 0; k < N; k++) {
+        *(w+k) = *(w+k) - en * *(deltaw+k);
+    }
+}
+
 
 // TAFxNLMS algorithm: -----------------------------------------------
 
-CVAFxNLMS::CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2) {
+CVAFxNLMS::CVAFxNLMS(int mem, float *wa, float *xa, float *wa2, float *xa2, float *xasec, float *xasec2, FIRFilter *fsec, FIRFilter *fsec2, float *deltawa, float *deltawa2) {
     N = mem;
     mu = 0.25;
     fi = 1e-4;
     w = wa;
     w2 = wa2;
+    deltaw = deltawa;
+    deltaw2 = deltawa2;
     x = xa;
     x2 = xa2;
     xsec = xasec;
@@ -115,12 +137,14 @@ void CVAFxNLMS::setParameters(int mem, float muu, float fii) {
 
 void CVAFxNLMS::reset() {
     for (int k = 0; k < N; k++) {
-    *(x+k) = 0;
-    *(x2+k) = 0;
-    *(xsec+k) = 0;
-    *(xsec2+k) = 0;
-    *(w+k) = 0; 
-    *(w2+k) = 0;
+        *(x+k) = 0;
+        *(x2+k) = 0;
+        *(xsec+k) = 0;
+        *(xsec2+k) = 0;
+        *(w+k) = 0; 
+        *(w2+k) = 0;
+        *(deltaw+k) = 0; 
+        *(deltaw2+k) = 0;
     }
     y = 0;
     ptr = N-1;
@@ -135,7 +159,7 @@ float CVAFxNLMS::filter(float xn,float xn2) {
     *(x2+ptr) = xn2;
     y = 0;
     for (int k = 0; k < N; k++) {
-    y = y + *(x+((ptr-k+N)%N)) * *(w+k) + *(x2+((ptr-k+N)%N)) * *(w2+k);
+        y = y + *(x+((ptr-k+N)%N)) * *(w+k) + *(x2+((ptr-k+N)%N)) * *(w2+k);
     }
     return y;
 }
@@ -143,13 +167,34 @@ float CVAFxNLMS::filter(float xn,float xn2) {
 void CVAFxNLMS::update(float en) {
     normterm = fi;
     for (int k = 0; k < N; k++) {
-    aux = *(xsec+k);
-    aux2 = *(xsec2+k);
-    normterm = normterm + aux*aux + aux2*aux2;
+        aux = *(xsec+k);
+        aux2 = *(xsec2+k);
+        normterm = normterm + aux*aux + aux2*aux2;
     }
     aux = mu * (en / normterm);
     for (int k = 0; k < N; k++) {
-    *(w+k) = *(w+k) - aux * *(xsec+((ptr-k+N)%N));
-    *(w2+k) = *(w2+k) - aux * *(xsec2+((ptr-k+N)%N));
+        *(w+k) = *(w+k) - aux * *(xsec+((ptr-k+N)%N));
+        *(w2+k) = *(w2+k) - aux * *(xsec2+((ptr-k+N)%N));
+    }
+}
+
+void CVAFxNLMS::updateStep1() {
+    normterm = fi;
+    for (int k = 0; k < N; k++) {
+        aux = *(xsec+k);
+        aux2 = *(xsec2+k);
+        normterm = normterm + aux*aux + aux2*aux2;
+    }
+    aux = mu / normterm;
+    for (int k = 0; k < N; k++) {
+        *(deltaw+k) = aux * *(xsec+((ptr-k+N)%N));
+        *(deltaw2+k) = aux * *(xsec2+((ptr-k+N)%N));
+    }
+}
+
+void CVAFxNLMS::updateStep2(float en) {
+    for (int k = 0; k < N; k++) {
+        *(w+k) = *(w+k) - en * *(deltaw+k);
+        *(w2+k) = *(w2+k) - en * *(deltaw2+k);
     }
 }
