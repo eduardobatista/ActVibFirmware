@@ -1,6 +1,8 @@
 #ifndef DSPfuncs_h
 #define DSPfuncs_h
 
+    float evalPoly(float x, int order, float* coefs);
+
     class DCRemover {
         public:
             float y;
@@ -22,6 +24,7 @@
             float levelscaler;
             int type;
             float A;
+            float Af;
             float f;
             float sincnst;
             float n;
@@ -41,6 +44,7 @@
 
         public:
             int last;
+            float lastf;
             int lastforout;
             bool enabled;
             int Z_LEVEL;

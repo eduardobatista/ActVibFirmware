@@ -2,6 +2,16 @@
 #include <math.h>
 #include "DSPfuncs.h"
 
+
+float evalPoly(float x, int order, float* coefs) {
+  float y = *(coefs+order);
+  float xp = 1.0;
+  for (int i = (order-1); i >= 0; i--) {
+    xp = xp * x;
+    y = y + *(coefs+i) * xp;
+  }
+}
+
 // DCRemover: ------------------------------------
 
 DCRemover::DCRemover(float alp) {
@@ -62,6 +72,7 @@ void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel, float 
     T_SAMPLE = BASE_T_SAMPLE / freqmult;
     type = tp;
     Z_LEVEL = dclevel;
+    Af = Amp;
     levelscaler = ((float)dclevel) / ((float)STD_Z_LEVEL);
     Amp = levelscaler * Amp; 
     if (type == 0) {

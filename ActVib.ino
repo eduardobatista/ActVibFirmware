@@ -130,6 +130,13 @@ SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGener
 // Definitions of simple IIR-based DC removers for the two inputs from accelerometers:
 DCRemover dcr[2] = {DCRemover(0.95f),DCRemover(0.95f)};
 
+bool predistenable[4] = {false,false,false,false};
+uint8_t predistorders[4] = {1,1,1,1};
+float predistcoefs[4][10] = {{0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
+                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
+                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
+                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0}};
+
 bool reading = false; // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
 bool algOn = false; // Flag indicating wheter the control algorithm is on or off
@@ -307,16 +314,6 @@ void getPaths() {
     are sent to the ESP32 from the host computer.
 */
 void loadFlashData() {
-  // prefs.begin("AlgData");
-  // Nsec = prefs.getInt("AlgData");
-  // Nfbk = prefs.getInt("AlgData");
-  // prefs.getBytes("AlgData",&wsec[0],Nsec*sizeof(float));
-  // prefs.getBytes("AlgData",&wfbk[0],Nfbk*sizeof(float));
-  // prefs.end();
-  // filtsec.setMem(Nsec);
-  // filtsec2.setMem(Nsec);
-  // filtfbk.setMem(Nfbk);
-  // Serial.println("Flash data loaded...");
   File file = SPIFFS.open("/wsec.dat",FILE_READ);
   if (!file) {
     Serial.println("Secondary path file not found in memory.");
@@ -382,6 +379,7 @@ void AuxTask(void * parameter){
   uint32_t timecounter2;
   uint8_t imuaux[14];
   EventBits_t uxBits;
+  float predistaux = 0;
 
     for (;;) {        
 
@@ -466,7 +464,12 @@ void AuxTask(void * parameter){
             } else {  // If path modeling:
               // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
               writeOutput(canalperturb,siggen[canalperturb].Z_LEVEL);
-              writeOutput(canalcontrole,siggen[canalcontrole].lastforout);
+              if (!predistenable[canalcontrole]) {
+                writeOutput(canalcontrole,siggen[canalcontrole].lastforout);
+              } else {
+                predistaux = evalPoly(siggen[canalcontrole].lastf,predistorders[canalcontrole],predistcoefs[canalcontrole]);
+                
+              }
             }
 
             uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask            
@@ -991,6 +994,27 @@ void MainTask(void * parameter){
           case 'f':            
             hascmd = 'f';
             break;
+
+          case 'p':
+            if (!reading && !controlling) {
+              uint8_t pidx = Serial.read();
+              uint8_t porder = Serial.read();
+              predistorders[pidx] = porder;
+              if (porder == 0) {
+                predistenable[pidx] = false;
+              } else {
+                predistenable[pidx] = true;
+                if (porder < 10) {
+                  Serial.readBytes(&cbuf[0], (porder+1) << 2);
+                  for (int ix = 0; ix < (porder+1); ix++) {
+                    predistcoefs[pidx][ix] = *(float *)(&cbuf[0+(ix<<2)]);
+                  }
+                  Serial.print("ok");
+                }
+              }
+            }
+            break;
+          
 
           case 'P':
             if (!reading && !controlling) {
