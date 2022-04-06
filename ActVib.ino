@@ -181,7 +181,7 @@ void writeOutput(int id, float valf) {
     int val;
     if (predistenable[id]) { 
       outscaler[id].evalOut(valf);  // This one registers the converted value (without predistortion).
-      valf = evalPoly(valf,predistorders[id],&predistcoefs[10*id]);
+      valf = valf * evalPoly(fabsf(valf),predistorders[id],&predistcoefs[10*id]);
       val = outscaler[id].dclevel - outscaler[id].evalOutNoReg(valf);
       // val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
     } else {
@@ -1140,7 +1140,7 @@ void MainTask(void * parameter){
             for (int auxX = 0; auxX <= predistorders[1]; auxX++) {
               Serial.println(predistcoefs[10+auxX]);
             }
-            Serial.println(evalPoly(0.5,2,&predistcoefs[10]),10);
+            Serial.println(evalPoly(0.5,5,&predistcoefs[10]),10);
             // unsigned char aux[4];
             // aux[0] = Serial.read();
             // aux[1] = Serial.read();
