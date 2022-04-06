@@ -3,6 +3,19 @@
 
     float evalPoly(float x, int order, float* coefs);
 
+    class OutputScaler {
+        private:
+            int STD_Z_LEVEL;             
+            float levelscaler;
+        public:
+            int lastwrittenout;
+            int dclevel;
+            OutputScaler(int stdzlevel);
+            void adjust(int newdclevel);
+            int evalOut(float valf);
+            int evalOutNoReg(float valf);
+    };
+
     class DCRemover {
         public:
             float y;
@@ -20,11 +33,9 @@
             float F_SAMPLE;
             float BASE_T_SAMPLE;
             float T_SAMPLE;            
-            int STD_Z_LEVEL;
-            float levelscaler;
+            // int STD_Z_LEVEL;            
             int type;
             float A;
-            float Af;
             float f;
             float sincnst;
             float n;
@@ -41,18 +52,20 @@
             float integ2;
             float cA2;
             int Psize2;
+            int lastaux;
 
         public:
-            int last;
+            // int last;
             float lastf;
-            int lastforout;
+            // float levelscaler;
+            // int lastwrittenout;
             bool enabled;
-            int Z_LEVEL;
-            SignalGenerator(float fsampling, float tsampling, int stdzlevel);
-            void setType(int tp, float Amp, float freq, int dclevel, float freqmult);
+            // int Z_LEVEL;
+            SignalGenerator(float fsampling, float tsampling);
+            void setType(int tp, float Amp, float freq, float freqmult);
             void setFreqMult(float freqmult);
             void setChirpParams(int ti, int di, int tf, int df, int a2);
-            int next();
+            float next();
             
     };
 

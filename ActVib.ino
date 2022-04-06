@@ -123,8 +123,9 @@ float deltawa2[1000];
 CVAFxNLMS cvafxnlms = CVAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0], &xasec2[0], &filtsec, &filtsec2, &deltawa[0], &deltawa2[0]);
 
 // Four signal generators defined below, since we have four output channels.
-SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE,2048),SignalGenerator(F_SAMPLE,T_SAMPLE,2048),
-                             SignalGenerator(F_SAMPLE,T_SAMPLE,128),SignalGenerator(F_SAMPLE,T_SAMPLE,128)};
+SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE),SignalGenerator(F_SAMPLE,T_SAMPLE),
+                             SignalGenerator(F_SAMPLE,T_SAMPLE),SignalGenerator(F_SAMPLE,T_SAMPLE)};
+OutputScaler outscaler[4] = {OutputScaler(2048),OutputScaler(2048),OutputScaler(128),OutputScaler(128)};
 
 // DC removal is needed when working with adaptive control algorithms.
 // Definitions of simple IIR-based DC removers for the two inputs from accelerometers:
@@ -132,10 +133,8 @@ DCRemover dcr[2] = {DCRemover(0.95f),DCRemover(0.95f)};
 
 bool predistenable[4] = {false,false,false,false};
 uint8_t predistorders[4] = {1,1,1,1};
-float predistcoefs[4][10] = {{0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
-                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
-                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0},
-                              {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0}};
+float predistcoefs[40] = {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,
+                          0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
 
 bool reading = false; // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
@@ -160,8 +159,8 @@ float xreff = 0.0;  // xref - (feedback filter output). This signal is the input
 int dclevel = 0;
 float maxamplevel = 0.0;
 int satlevel = 0;
-int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the DAC output. 
-int senddataaux = 0;
+// int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the DAC output. 
+// int senddataaux = 0;
 int lastsenddataaux = 0;
 float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.7
 unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
@@ -176,17 +175,43 @@ uint8_t cbuf2[20]; // Stores temporary data from commmunication buses.
     id = 2 -> GPIO25 (Eletroimã 3 - 8 bits)
     id = 3 -> GPIO26 (Eletroimã 4  - 8 bits)
 */
-void writeOutput(int id,int val) {    
-    if (id < 2) {
-      mcps[id].setValue(val & 0x0FFF);
+void writeOutput(int id, float valf) {
+    if (valf > 1.0) { valf = 1.0; }
+    else if (valf < -1.0) { valf = -1.0; }  
+    int val;
+    if (predistenable[id]) { 
+      outscaler[id].evalOut(valf);  // This one registers the converted value (without predistortion).
+      valf = evalPoly(valf,predistorders[id],&predistcoefs[10*id]);
+      val = outscaler[id].dclevel - outscaler[id].evalOutNoReg(valf);
+      // val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
     } else {
-      // Output pins are 25 and 26, for ids equals to 2 and 3 respetively:
+      val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
+    }
+    if (id < 2) {      
+      mcps[id].setValue(val & 0x0FFF);
+    } else {      
       dacWrite(23+id, val & 0xFF);
     }
 }
+void zeroOutput(int id) {
+    outscaler[id].lastwrittenout = 0;
+    if (id < 2) {      
+      mcps[id].setValue(0);
+    } else {      
+      dacWrite(23+id, 0);
+    }
+}
 
-void writeOutputDebug(int id,int val) {    
-    // Serial.write(id);
+void writeOutputDebug(int id, float valf) {    
+    if (valf > 1.0) { valf = 1.0; }
+    else if (valf < -1.0) { valf = -1.0; }  
+    int val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
+    Serial.write((val >> 8) & 0xFF);
+    Serial.write(val & 0xFF);
+}
+void zeroOutputDebug(int id) {
+    outscaler[id].lastwrittenout = 0;
+    int val = 0;
     Serial.write((val >> 8) & 0xFF);
     Serial.write(val & 0xFF);
 }
@@ -417,9 +442,9 @@ void AuxTask(void * parameter){
             for (int id = 0; id < 4; id++) {
                 if (siggen[id].enabled) { 
                   siggen[id].next();
-                  writeOutput(id,siggen[id].lastforout); 
+                  writeOutput(id,siggen[id].lastf); 
                 }
-                else { writeOutput(id,0); }
+                else { zeroOutput(id); }
             }
 
             // ADC readings:
@@ -459,17 +484,12 @@ void AuxTask(void * parameter){
             // Writing outputs:
             if (ctrltask == 0) {  // If controlling:       
               // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
-              writeOutput(canalperturb,siggen[canalperturb].lastforout);
-              writeOutput(canalcontrole,outputaux);
+              writeOutput(canalperturb,siggen[canalperturb].lastf);
+              writeOutput(canalcontrole,lastout); // TODO: WARNING!!!
             } else {  // If path modeling:
               // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
-              writeOutput(canalperturb,siggen[canalperturb].Z_LEVEL);
-              if (!predistenable[canalcontrole]) {
-                writeOutput(canalcontrole,siggen[canalcontrole].lastforout);
-              } else {
-                predistaux = evalPoly(siggen[canalcontrole].lastf,predistorders[canalcontrole],predistcoefs[canalcontrole]);
-                
-              }
+              zeroOutput(canalperturb);
+              writeOutput(canalcontrole,siggen[canalcontrole].lastf);
             }
 
             uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask            
@@ -657,10 +677,10 @@ void MainTask(void * parameter){
             // Signal Generators:
             for (int id = 0; id < 4; id++) {
                 if (id < 2) {
-                  tdata.data[ctt++] = (siggen[id].last >> 8) & 0xFF;
-                  tdata.data[ctt++] = siggen[id].last & 0xFF;
+                  tdata.data[ctt++] = (outscaler[id].lastwrittenout >> 8) & 0xFF;
+                  tdata.data[ctt++] = outscaler[id].lastwrittenout & 0xFF;
                 } else {
-                  tdata.data[ctt++] = siggen[id].last;
+                  tdata.data[ctt++] = outscaler[id].lastwrittenout;
                 }        
             }
             
@@ -788,12 +808,12 @@ void MainTask(void * parameter){
             // Writing outputs:
             if (ctrltask == 0) {  // If controlling:       
               // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
-              writeOutputDebug(canalperturb,siggen[canalperturb].lastforout);
-              writeOutputDebug(canalcontrole,outputaux);
+              writeOutputDebug(canalperturb,siggen[canalperturb].lastf);
+              writeOutputDebug(canalcontrole,lastout);
             } else {  // If path modeling:
               // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
-              writeOutputDebug(canalperturb,siggen[canalperturb].Z_LEVEL);
-              writeOutputDebug(canalcontrole,siggen[canalcontrole].lastforout);
+              zeroOutputDebug(canalperturb);
+              writeOutputDebug(canalcontrole,siggen[canalcontrole].lastf);
             }
             
           }
@@ -851,11 +871,13 @@ void MainTask(void * parameter){
                   
               }
 
-              lastsenddataaux = senddataaux;
-              senddataaux = ((int)roundf( maxamplevel * lastout ));
-              outputaux = (dclevel - senddataaux);
-              if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
-              else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+              lastsenddataaux = outscaler[canalcontrole].lastwrittenout;
+              // senddataaux = ((int)roundf( maxamplevel * lastout ));
+              // outputaux = (dclevel - senddataaux);
+              // if (outputaux > satlevel) { outputaux = satlevel; errorflags = errorflags | 0x20; }
+              // else if (outputaux < 0) { outputaux = 0; errorflags = errorflags | 0x40; }
+              if (lastout > 1.0) { lastout = 1.0; errorflags = errorflags | 0x20; }
+              else if (lastout < -1.0) { lastout = -1.0; errorflags = errorflags | 0x40; }
 
             }
           
@@ -867,8 +889,8 @@ void MainTask(void * parameter){
             tdata.data[ctt++] = 0xF;
             tdata.data[ctt++] = 0xF;
             if (ctrltask == 0) {
-              tdata.data[ctt++] = (siggen[canalperturb].last >> 8) & 0xFF;
-              tdata.data[ctt++] = siggen[canalperturb].last & 0xFF;
+              tdata.data[ctt++] = (outscaler[canalperturb].lastwrittenout >> 8) & 0xFF;
+              tdata.data[ctt++] = outscaler[canalperturb].lastwrittenout & 0xFF;
               // tdata.data[ctt++] = (senddataaux >> 8) & 0xFF;
               // tdata.data[ctt++] = senddataaux & 0xFF;
               tdata.data[ctt++] = (lastsenddataaux >> 8) & 0xFF;
@@ -876,8 +898,8 @@ void MainTask(void * parameter){
             } else {
               tdata.data[ctt++] = 0;
               tdata.data[ctt++] = 0;
-              tdata.data[ctt++] = (siggen[canalcontrole].last >> 8) & 0xFF;
-              tdata.data[ctt++] = siggen[canalcontrole].last & 0xFF;
+              tdata.data[ctt++] = (outscaler[canalcontrole].lastwrittenout >> 8) & 0xFF;
+              tdata.data[ctt++] = outscaler[canalcontrole].lastwrittenout & 0xFF;
             }
             *(float *) &tdata.data[ctt] = xref;
             ctt = ctt + 4;
@@ -960,12 +982,12 @@ void MainTask(void * parameter){
               filtfbk.reset();
               lastout = 0;
               // TODO: check the following
-              dclevel = siggen[canalcontrole].Z_LEVEL;              
-              maxamplevel = (float)(dclevel-1);
+              // dclevel = outscale[canalcontrole].dclevel;              
+              // maxamplevel = (float)(dclevel-1);
               // maxamplevel = 1.0;
-              satlevel = dclevel * 2 - 1;
-              outputaux = dclevel;
-              senddataaux = 0;
+              // satlevel = dclevel * 2 - 1;
+              // outputaux = dclevel;
+              // senddataaux = 0;
               xEventGroupClearBits(xEventGroup,0x03);
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
@@ -1002,14 +1024,19 @@ void MainTask(void * parameter){
               predistorders[pidx] = porder;
               if (porder == 0) {
                 predistenable[pidx] = false;
+                Serial.write("ok");
+                // Serial.write(pidx);
               } else {
                 predistenable[pidx] = true;
                 if (porder < 10) {
-                  Serial.readBytes(&cbuf[0], (porder+1) << 2);
-                  for (int ix = 0; ix < (porder+1); ix++) {
-                    predistcoefs[pidx][ix] = *(float *)(&cbuf[0+(ix<<2)]);
-                  }
-                  Serial.print("ok");
+                  if (Serial.readBytes(&cbuf[0], (porder+1) << 2) != ((porder+1) << 2)) {
+                    Serial.write("er");
+                  } else {
+                    for (int ix = 0; ix < (porder+1); ix++) {
+                      predistcoefs[10*pidx+ix] = *(float *)(&cbuf[0+(ix<<2)]);
+                    }
+                    Serial.write("ok");
+                  }                  
                 }
               }
             }
@@ -1102,6 +1129,18 @@ void MainTask(void * parameter){
 
 
           case 'X':
+            Serial.println(predistenable[0]);
+            Serial.println(predistenable[1]);
+            Serial.println(predistenable[2]);
+            Serial.println(predistenable[3]);
+            Serial.println(predistorders[0]);
+            Serial.println(predistorders[1]);
+            Serial.println(predistorders[2]);
+            Serial.println(predistorders[3]);
+            for (int auxX = 0; auxX <= predistorders[1]; auxX++) {
+              Serial.println(predistcoefs[10+auxX]);
+            }
+            Serial.println(evalPoly(0.5,2,&predistcoefs[10]),10);
             // unsigned char aux[4];
             // aux[0] = Serial.read();
             // aux[1] = Serial.read();
@@ -1187,7 +1226,7 @@ void MainTask(void * parameter){
               T_SAMPLE = ((float)CTTRatio) * 1e-3;
               F_SAMPLE = 1.0 / T_SAMPLE;
               xFrequency0 = CTTRatio; 
-              Serial.write("k");
+              Serial.write("f");
               Serial.write(CTTRatio);  
               cthascmd = 0;
               hascmd = 0;
@@ -1205,7 +1244,7 @@ void MainTask(void * parameter){
                 imuaddress[imuidd] = cbuf[1];
                 imuextra[imuidd] = cbuf[2];                
               }
-              Serial.write("ok");            
+              Serial.write("KI");            
               hascmd = 0;
               cthascmd = 0;
             }
@@ -1217,11 +1256,13 @@ void MainTask(void * parameter){
               unsigned int idgerador = Serial.read();  
               unsigned int tipo = Serial.read();
               float amp = (float)((Serial.read() << 8) + Serial.read());
+              amp = amp / 2047.0;
               float freq = (float)Serial.read();          
               freq = freq + ((float)Serial.read())/100.0;
               int dclevel = (Serial.read() << 8) + Serial.read();
               if (idgerador < 4) {
-                siggen[idgerador].setType(tipo,amp,freq,dclevel,4.0);
+                siggen[idgerador].setType(tipo,amp,freq,4.0);
+                outscaler[idgerador].adjust(dclevel);
                 if (tipo == 2) {
                   siggen[idgerador].setChirpParams(Serial.read(),Serial.read(),Serial.read(),
                                                   Serial.read(),(Serial.read() << 8) + Serial.read());
@@ -1245,7 +1286,7 @@ void MainTask(void * parameter){
               flaginitADC = 1;
               while (flaginitADC > 0) { delay(1); }
               if (flaginitADC == 0) {
-                Serial.write("ok");
+                Serial.write("KA");
                 Serial.write(&adcseq[0],4);
               } else {
                 Serial.write("e!");
@@ -1342,7 +1383,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   // Serial.begin(500000);
   Serial.begin(115200);
-  Serial.setTimeout(1000);
+  Serial.setTimeout(10);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);
@@ -1367,10 +1408,14 @@ void setup() {
 
   flagzeroed = false;
 
-  siggen[0].setType(0,0,10,2048,1.0);
-  siggen[1].setType(0,0,10,2048,1.0);
-  siggen[2].setType(0,0,10,128,1.0);
-  siggen[3].setType(0,0,10,128,1.0);
+  siggen[0].setType(0,0,10,1.0);
+  siggen[1].setType(0,0,10,1.0);
+  siggen[2].setType(0,0,10,1.0);
+  siggen[3].setType(0,0,10,1.0);
+  outscaler[0].adjust(2048);
+  outscaler[1].adjust(2048);
+  outscaler[2].adjust(128);
+  outscaler[3].adjust(128);
 
   xEventGroup = xEventGroupCreate();
 

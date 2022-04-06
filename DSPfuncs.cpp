@@ -10,7 +10,31 @@ float evalPoly(float x, int order, float* coefs) {
     xp = xp * x;
     y = y + *(coefs+i) * xp;
   }
+  return y;
 }
+
+
+// OutputScaler: ---------------------------------
+OutputScaler::OutputScaler(int stdzlevel) {
+  STD_Z_LEVEL = stdzlevel;
+  dclevel = stdzlevel;
+  levelscaler = (float)(dclevel-1);
+}
+
+void OutputScaler::adjust(int newdclevel) {
+  dclevel = newdclevel;
+  levelscaler = (float)(dclevel - 1);
+}
+
+int OutputScaler::evalOut(float valf) {
+  lastwrittenout = ((int)roundf(levelscaler * valf));
+  return lastwrittenout;
+}
+
+int OutputScaler::evalOutNoReg(float valf) {
+  return ((int)roundf(levelscaler * valf));
+}
+
 
 // DCRemover: ------------------------------------
 
@@ -38,14 +62,11 @@ float DCRemover::filter(float x) {
 
 // Signal Generator: --------------------------------------------------------------------
 
-SignalGenerator::SignalGenerator(float fsampling, float tsampling, int stdzlevel) {
+SignalGenerator::SignalGenerator(float fsampling, float tsampling) {
     F_SAMPLE = fsampling;
     BASE_F_SAMPLE = fsampling;
     T_SAMPLE = tsampling;
     BASE_T_SAMPLE = tsampling;
-    Z_LEVEL = stdzlevel;
-    STD_Z_LEVEL = stdzlevel;
-    levelscaler = 1;
     sincnst = 0;
     n = 0;
     ctinit = 0;
@@ -63,18 +84,14 @@ SignalGenerator::SignalGenerator(float fsampling, float tsampling, int stdzlevel
     type = 0;
     A = 0.0; // 0 a 256
     f = 10.0; // Em Hertz
-    last = 0;
+    lastf = 0.0;
     enabled = false;
 }
 
-void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel, float freqmult) {
+void SignalGenerator::setType(int tp, float Amp, float freq, float freqmult) {
     F_SAMPLE = freqmult * BASE_F_SAMPLE;
     T_SAMPLE = BASE_T_SAMPLE / freqmult;
     type = tp;
-    Z_LEVEL = dclevel;
-    Af = Amp;
-    levelscaler = ((float)dclevel) / ((float)STD_Z_LEVEL);
-    Amp = levelscaler * Amp; 
     if (type == 0) {
         A = Amp;
     } else if ((type == 1) || (type == 2)) {
@@ -89,11 +106,11 @@ void SignalGenerator::setType(int tp, float Amp, float freq, int dclevel, float 
         f = freq; 
         Psize2 = ((int)round(1.0/freq / T_SAMPLE)) >> 1; 
         n = -1.0;
-        last = Z_LEVEL - (int)round(A);
+        lastf = A;
     }
     if (Amp == 0.0) { 
         enabled = false; 
-        last = 0;
+        lastf = 0.0;
     } else { 
         enabled = true; 
     }
@@ -106,7 +123,7 @@ void SignalGenerator::setFreqMult(float freqmult) {
         sincnst = 2.0 * M_PI * f * T_SAMPLE; 
     } else if (type == 4) {
         Psize2 = ((int)round(1.0/f / T_SAMPLE)) >> 1; 
-        last = Z_LEVEL - (int)round(A);
+        lastf = A;
     }    
 }
 
@@ -115,23 +132,18 @@ void SignalGenerator::setChirpParams(int ti, int di, int tf, int df, int a2) {
     cdeltai = (float)(di) * F_SAMPLE / 10.0;
     ctfim = (float)(tf) * F_SAMPLE;
     cdeltaf = (float)(df) * F_SAMPLE / 10.0;
-    A2 = levelscaler * (float)a2;
+    // A2 = levelscaler * (float)a2; // TODO!!!
     cA2 = A2/(2*M_PI*f*2*M_PI*f);
 }
 
-int SignalGenerator::next() {
+float SignalGenerator::next() {
       if (type == 1) {
         n = n + 1.0;
-        // last = (int)round(A * sin(sincnst*n)) + 128;
-        last = (int)round(A * sin(sincnst*n));
-        lastforout = Z_LEVEL - last;
-        return last;
+        lastf = A * sin(sincnst*n);
       } else if (type == 0) {
-        last = (int)round(A);
-        // last = random( (last<<1) + 1 ) + (128 - last);
-        last = (random( (last<<1) + 1 ) - last);
-        lastforout = Z_LEVEL - last;
-        return last;
+        lastaux = (int)roundf(A*4096.0);
+        lastaux = random( (lastaux<<1) + 1 ) - lastaux;
+        lastf = ((float)lastaux) / 4096.0;
       } else if (type == 2) {
         n = n + 1.0;
         if ( (n < ctinit) || (n > (ctfim+cdeltaf)) ) {
@@ -146,18 +158,19 @@ int SignalGenerator::next() {
         integ = integ + 2.0 * M_PI * ff * T_SAMPLE;
         //integ2 = integ2 + 2.0 * M_PI * (2*ff) * T_SAMPLE;
         //last = (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ))  + 128;
-        last = ( (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ)) );
-        lastforout = Z_LEVEL - last;
-        return last;
+        // TODO: Fix this to float output:
+        // last = ( (int)round( AA * sin(integ) ) + (int)round(AA2 * sin(2*integ)) );
+        lastf = ( roundf( AA * sin(integ) ) + roundf(AA2 * sin(2*integ)) );
+        // lastforout = Z_LEVEL - last;
+        // return last;
       } else if (type == 4) {
         n = n + 1.0;
         if ( ((int)n) % Psize2 == 0 ) {
           A = -A;
         }
-        last = (int)round(A);
-        lastforout = Z_LEVEL - last;
-        return last;
+        lastf = A;        
       }
+      return lastf;
 }
 
 // --------------------------------------------------------------------------------------
