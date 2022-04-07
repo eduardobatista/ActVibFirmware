@@ -181,7 +181,7 @@ void writeOutput(int id, float valf) {
     int val;
     if (predistenable[id]) { 
       outscaler[id].evalOut(valf);  // This one registers the converted value (without predistortion).
-      valf = valf * evalPoly(fabsf(valf),predistorders[id],&predistcoefs[10*id]);
+      valf = valf * evalPoly(fabsf(valf),predistorders[id],&predistcoefs[10*id]);  // Adjust sample amplitude.
       val = outscaler[id].dclevel - outscaler[id].evalOutNoReg(valf);
       // val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
     } else {
@@ -361,6 +361,19 @@ void loadFlashData() {
     Serial.println(Nfbk);
     file.close();
     filtfbk.setMem(Nfbk);
+  }
+  file = SPIFFS.open("/predist.dat",FILE_READ);
+  if (!file) {
+    Serial.println("Predist data not found in memory.");
+  } else {
+    file.read(&predistorders[0],4);
+    for (int i = 0; i < 4; i++) {
+      if (predistorders[i] == 0) { predistenable[i] = false; }
+      else { predistenable[i] = true; }
+    }
+    file.read((uint8_t *)&predistcoefs[0],160);
+    file.close();
+    Serial.println("Predist data read successfully.");
   }
 }
 
@@ -1025,19 +1038,34 @@ void MainTask(void * parameter){
               if (porder == 0) {
                 predistenable[pidx] = false;
                 Serial.write("ok");
-                // Serial.write(pidx);
               } else {
                 predistenable[pidx] = true;
                 if (porder < 10) {
-                  if (Serial.readBytes(&cbuf[0], (porder+1) << 2) != ((porder+1) << 2)) {
+                  uint32_t nbytes = (porder+1) << 2;
+                  if (Serial.readBytes(&cbuf[0], nbytes) != nbytes) {
                     Serial.write("er");
                   } else {
-                    for (int ix = 0; ix < (porder+1); ix++) {
-                      predistcoefs[10*pidx+ix] = *(float *)(&cbuf[0+(ix<<2)]);
-                    }
                     Serial.write("ok");
+                    for (int ix = 0; ix < (porder+1); ix++) {
+                      predistcoefs[10*pidx+ix] = *(float *)(&cbuf[0+(ix<<2)]);                      
+                    }
+                    Serial.write(&cbuf[0],nbytes);
                   }                  
                 }
+              }              
+            }
+            break;
+
+          case 'w':
+            if (!reading && !controlling) {
+              File file = SPIFFS.open("/predist.dat",FILE_WRITE);
+              if(!file){ 
+                Serial.print("er0"); 
+              } else {
+                file.write(&predistorders[0],4);
+                file.write((uint8_t *)&predistcoefs[0],160);
+                file.close();
+                Serial.print("ok!"); 
               }
             }
             break;
@@ -1140,7 +1168,7 @@ void MainTask(void * parameter){
             for (int auxX = 0; auxX <= predistorders[1]; auxX++) {
               Serial.println(predistcoefs[10+auxX]);
             }
-            Serial.println(evalPoly(0.5,5,&predistcoefs[10]),10);
+            Serial.println(evalPoly(0.5,predistorders[1],&predistcoefs[10]),10);
             // unsigned char aux[4];
             // aux[0] = Serial.read();
             // aux[1] = Serial.read();
