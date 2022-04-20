@@ -199,6 +199,7 @@ class LSM6DS3 : public LSM6DS3Core {
 	float readSensor(int sensorid);
     void setFusionWeights(float *fusweights);
     float *fusionweights;
+    
 
   private:
     // NEW!!

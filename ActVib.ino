@@ -1477,6 +1477,7 @@ void setup() {
 
   for (int ix = 0; ix < 3; ix++) {
     lsms[ix].setFusionWeights(&fusionweights[0]);
+    mpus[ix].setFusionWeights(&fusionweights[0]);
   }
   
     // disableCore1WDT(); 

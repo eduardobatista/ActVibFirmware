@@ -42,6 +42,9 @@
             void readData(uint8_t *outputpointer);
             void setAddress(int addr);
             int getAddress();
+            void setFusionWeights(float *fusweights);
+            float *fusionweights;
+
 
     };
 

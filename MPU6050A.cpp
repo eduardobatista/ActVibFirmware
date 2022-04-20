@@ -121,27 +121,47 @@ void MPU6050A::enableBypass(bool val) {
       }
 }
 
+void MPU6050A::setFusionWeights(float *fusweights) {
+  fusionweights = fusweights;
+}
+
 /*
     Lê os dados de apenas 1 sensor, sendo: 
     0 para AccX, 1 para AccY, 2 para AccZ, 
     3 para GyroX, 4 para GyroY, 5 para GyroZ
 */
 float MPU6050A::readSensor(int id) {
-      float scl;
-      if (id < 3) {
-        id = ACCEL_XOUT + id*2;
-        scl = accscale;
+      if (id < 6) {
+        float scl;
+        if (id < 3) {
+          id = ACCEL_XOUT + id*2;
+          scl = accscale;
+        } else {
+          id = GYRO_XOUT + (id-3)*2;
+          scl = gyroscale;
+        }
+        TWire->beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
+        TWire->write(id);                         // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
+        TWire->endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
+        TWire->requestFrom(MPU_ADDR,2);           // configura para receber 2 bytes começando do registro escolhido acima (0x3B)    
+        buf[1] = TWire->read();
+        buf[0] = TWire->read();
+        return (float)(*(int16_t *)&buf[0]) * scl;
       } else {
-        id = GYRO_XOUT + (id-3)*2;
-        scl = gyroscale;
+        id = ACCEL_XOUT + 4;
+        TWire->beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
+        TWire->write(id);                         // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
+        TWire->endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
+        TWire->requestFrom(MPU_ADDR,6);           // configura para receber 6 bytes começando do registro escolhido acima (0x3B)    
+        buf[1] = TWire->read();
+        buf[0] = TWire->read();
+        buf[3] = TWire->read();
+        buf[2] = TWire->read();
+        buf[5] = TWire->read();
+        buf[4] = TWire->read();
+        return *(fusionweights) * ((float)(*(int16_t *)&buf[0]) * accscale) + *(fusionweights+1) * ((float)(*(int16_t *)&buf[4]) * gyroscale);
       }
-      TWire->beginTransmission(MPU_ADDR);       // inicia comunicação com endereço do MPU6050
-      TWire->write(id);                         // envia o registro com o qual se deseja trabalhar, começando com registro 0x3B (ACCEL_XOUT_H)
-      TWire->endTransmission(false);            // termina transmissão mas continua com I2C aberto (envia STOP e START)
-      TWire->requestFrom(MPU_ADDR,2);           // configura para receber 2 bytes começando do registro escolhido acima (0x3B)    
-      buf[1] = TWire->read();
-      buf[0] = TWire->read();
-      return (float)(*(int16_t *)&buf[0]) * scl;
+      
 }
 
 void MPU6050A::readData(uint8_t *outputpointer) {
