@@ -903,6 +903,10 @@ void LSM6DS3::fifoEnd(void) {
 }
 
 // NEW!
+void LSM6DS3::setFusionWeights(float *fusweights) {
+    fusionweights = fusweights;
+}
+
 float LSM6DS3::readSensor(int sensorid) {
 	float ret = 0;
 	switch (sensorid)
@@ -924,7 +928,10 @@ float LSM6DS3::readSensor(int sensorid) {
 			break;
 		case 5:
 			ret = readFloatGyroZ();
-			break;	
+			break;
+        case 6:
+            ret = *(fusionweights) * readFloatAccelZ() + *(fusionweights+1) * readFloatGyroX();
+            break;
 		default:
 			break;
 	}

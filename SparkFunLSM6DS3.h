@@ -197,13 +197,15 @@ class LSM6DS3 : public LSM6DS3Core {
     // New!!!
 	void config(int gyroRange, int accelRange, int filterBandwidth);
 	float readSensor(int sensorid);
+    void setFusionWeights(float *fusweights);
+    float *fusionweights;
 
   private:
-
     // NEW!!
 	int gyromap[5] = {125, 250, 500, 1000, 2000};
 	int bwmap[4] = {50, 100, 200, 400};
 	uint8_t accmap[4] = {2, 4, 8, 16};
+    
 
 };
 

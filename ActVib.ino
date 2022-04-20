@@ -135,6 +135,7 @@ bool predistenable[4] = {false,false,false,false};
 uint8_t predistorders[4] = {1,1,1,1};
 float predistcoefs[40] = {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,
                           0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
+float fusionweights[2] = {0.5,0.5};
 
 bool reading = false; // Flag for continous reading mode on or off
 bool controlling = false; // Flag for control mode on or off
@@ -372,6 +373,7 @@ void loadFlashData() {
       else { predistenable[i] = true; }
     }
     file.read((uint8_t *)&predistcoefs[0],160);
+    file.read((uint8_t *)&fusionweights[0],8);
     file.close();
     Serial.println("Predist data read successfully.");
   }
@@ -1056,6 +1058,19 @@ void MainTask(void * parameter){
             }
             break;
 
+          case 'F':
+            if (!reading && !controlling) {              
+              if (Serial.readBytes(&cbuf[0], 8) != 8) {
+                Serial.write("er");
+              } else {
+                Serial.write("ok");
+                fusionweights[0] = *(float *)(&cbuf[0]);
+                fusionweights[1] = *(float *)(&cbuf[4]);
+                Serial.write(&cbuf[0],8);
+              }             
+            }
+            break;
+
           case 'w':
             if (!reading && !controlling) {
               File file = SPIFFS.open("/predist.dat",FILE_WRITE);
@@ -1064,6 +1079,7 @@ void MainTask(void * parameter){
               } else {
                 file.write(&predistorders[0],4);
                 file.write((uint8_t *)&predistcoefs[0],160);
+                file.write((uint8_t *)&fusionweights[0],8);
                 file.close();
                 Serial.print("ok!"); 
               }
@@ -1157,6 +1173,14 @@ void MainTask(void * parameter){
 
 
           case 'X':
+            Serial.println("Fusion Weights:");
+            Serial.println(fusionweights[0]);
+            Serial.println(fusionweights[1]);
+            for (int auxX = 0; auxX < 3; auxX++) {
+              Serial.println(*(lsms[auxX].fusionweights));
+              Serial.println(*(lsms[auxX].fusionweights+1));
+            }
+            Serial.println("Predist Data:");
             Serial.println(predistenable[0]);
             Serial.println(predistenable[1]);
             Serial.println(predistenable[2]);
@@ -1168,7 +1192,9 @@ void MainTask(void * parameter){
             for (int auxX = 0; auxX <= predistorders[1]; auxX++) {
               Serial.println(predistcoefs[10+auxX]);
             }
-            Serial.println(evalPoly(0.5,predistorders[1],&predistcoefs[10]),10);
+            for (float auxX = -1.0; auxX <= 1.0; auxX = auxX + 0.1) {
+              Serial.println(auxX * evalPoly(fabsf(auxX),predistorders[1],&predistcoefs[10]),10);
+            }            
             // unsigned char aux[4];
             // aux[0] = Serial.read();
             // aux[1] = Serial.read();
@@ -1449,6 +1475,9 @@ void setup() {
 
   loadFlashData();
 
+  for (int ix = 0; ix < 3; ix++) {
+    lsms[ix].setFusionWeights(&fusionweights[0]);
+  }
   
     // disableCore1WDT(); 
     // Inicialização Core 0 (Leitura)
