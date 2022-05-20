@@ -610,6 +610,11 @@ status_t LSM6DS3::begin() {
     //Write the byte
     writeRegister(LSM6DS3_ACC_GYRO_CTRL2_G, dataToWrite);
 
+    //Set the BDU bit
+    readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL3_C);
+    dataToWrite |= 0x40;
+    writeRegister(LSM6DS3_ACC_GYRO_CTRL3_C, dataToWrite);
+
     //Return WHO AM I reg  //Not no mo!
     uint8_t result;
     readRegister(&result, LSM6DS3_ACC_GYRO_WHO_AM_I_REG);
