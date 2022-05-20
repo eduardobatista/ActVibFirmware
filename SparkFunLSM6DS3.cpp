@@ -417,7 +417,7 @@ void LSM6DS3::config(int gyroRange, int accelRange, int filterBandwidth) {
 
     settings.gyroEnabled = 1;  //Can be 0 or 1
 	settings.gyroRange = gyromap[gyroRange];;   //Max deg/s.  Can be: 125, 245, 500, 1000, 2000
-	settings.gyroSampleRate = 1666;   //Hz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666
+	settings.gyroSampleRate = 833;   //Hz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666
 	settings.gyroBandWidth = bwmap[filterBandwidth];  //Hz.  Can be: 50, 100, 200, 400;
 	settings.gyroFifoEnabled = 1;  //Set to include gyro in FIFO
 	settings.gyroFifoDecimation = 1;  //set 1 for on /1
@@ -425,7 +425,7 @@ void LSM6DS3::config(int gyroRange, int accelRange, int filterBandwidth) {
 	settings.accelEnabled = 1;
 	settings.accelODROff = 1;
 	settings.accelRange = accmap[accelRange];      //Max G force readable.  Can be: 2, 4, 8, 16
-	settings.accelSampleRate = 1666;  //Hz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666, 3332, 6664, 13330
+	settings.accelSampleRate = 833;  //Hz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666, 3332, 6664, 13330
 	settings.accelBandWidth = bwmap[filterBandwidth];  //Hz.  Can be: 50, 100, 200, 400;
 	settings.accelFifoEnabled = 1;  //Set to include accelerometer in the FIFO
 	settings.accelFifoDecimation = 1;  //set 1 for on /1
@@ -609,11 +609,6 @@ status_t LSM6DS3::begin() {
     }
     //Write the byte
     writeRegister(LSM6DS3_ACC_GYRO_CTRL2_G, dataToWrite);
-
-    //Set the BDU bit
-    readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL3_C);
-    dataToWrite |= 0x40;
-    writeRegister(LSM6DS3_ACC_GYRO_CTRL3_C, dataToWrite);
 
     //Return WHO AM I reg  //Not no mo!
     uint8_t result;
