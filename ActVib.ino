@@ -1435,8 +1435,8 @@ void MainTask(void * parameter){
 // Startup configuration:
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
-  // Serial.begin(500000);
-  Serial.begin(115200);
+  Serial.begin(500000);
+  // Serial.begin(115200);
   Serial.setTimeout(10);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
