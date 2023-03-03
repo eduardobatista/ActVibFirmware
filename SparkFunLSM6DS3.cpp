@@ -310,7 +310,7 @@ status_t LSM6DS3Core::readRegister(uint8_t* outputPointer, uint8_t offset) {
 status_t LSM6DS3Core::readRegisterInt16(int16_t* outputPointer, uint8_t offset) {
     uint8_t myBuffer[2];
     status_t returnError = readRegisterRegion(myBuffer, offset, 2);  //Does memory transfer
-    int16_t output = (int16_t)myBuffer[0] | int16_t(myBuffer[1] << 8);
+    int16_t output = (int16_t)(myBuffer[1] << 8 | myBuffer[0]);
 
     *outputPointer = output;
     return returnError;
@@ -930,6 +930,11 @@ float LSM6DS3::readSensor(int sensorid) {
 			ret = readFloatGyroZ();
 			break;
         case 6:
+            // uint8_t imuaux[4];
+            // readRegisterRegion(&imuaux[0],0x22,2);
+            // readRegisterRegion(&imuaux[2],0x2C,2);
+            // ret = *(fusionweights) * calcAccel((int16_t)(imuaux[3] << 8 | imuaux[2])) + 
+            //       *(fusionweights+1) * calcGyro((int16_t)(imuaux[1] << 8 | imuaux[0]));
             ret = *(fusionweights) * readFloatAccelZ() + *(fusionweights+1) * readFloatGyroX();
             break;
 		default:
@@ -937,3 +942,4 @@ float LSM6DS3::readSensor(int sensorid) {
 	}
 	return ret;
 }
+

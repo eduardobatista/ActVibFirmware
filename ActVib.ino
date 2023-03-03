@@ -28,7 +28,9 @@ static const int spiClk = 1000000; // 1 MHz
 TwoWire WireA = TwoWire(0); 
 TwoWire WireB = TwoWire(1); // Test: GPIO14 as SCL and GPIO13 as SDA 
 
-Preferences prefs;      // Preferences!
+hw_timer_t *timer0cfg = NULL;
+
+uint32_t baudrate = 500000;
 
 // Defining loop tasks
 TaskHandle_t reading1;
@@ -377,6 +379,29 @@ void loadFlashData() {
     file.close();
     Serial.println("Predist data read successfully.");
   }
+  file = SPIFFS.open("/baudrate.dat",FILE_READ);
+  if (!file) {
+    baudrate = 500000;
+  } else {
+    uint8_t aux;
+    file.read(&aux,1);
+    switch (aux) {
+      case 0:
+        baudrate = 115200;
+        break;
+      case 1:
+        baudrate = 500000;
+        break;
+      case 2:
+        baudrate = 921600;
+        break;
+      case 3:
+        baudrate = 1000000;
+        break;
+      default:
+        baudrate = 500000;
+    }
+  }
 }
 
 /*
@@ -384,7 +409,7 @@ void loadFlashData() {
 */ 
 int8_t flaginitIMU = -1; 
 uint8_t cttcycle = 0; 
-Queue<uint32_t> tcount2queue = Queue<uint32_t>(2);
+Queue<uint64_t> tcount2queue = Queue<uint64_t>(3);
 bool flagzeroed = false;
 
 
@@ -429,7 +454,9 @@ void AuxTask(void * parameter){
 
             if ( cttcycle == 0 ) {    
               tcount2queue.clear();
-              tcount2queue.push(ESP.getCycleCount()); 
+              tcount2queue.push(timerReadMicros(timer0cfg)-timecounter2);
+              timecounter2 = timerReadMicros(timer0cfg);
+              tcount2queue.push(timecounter2);
               uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
               // Reading IMUS in the main I2C Bus:
               for (int id = 0; id < 3; id++) {
@@ -450,8 +477,6 @@ void AuxTask(void * parameter){
                   }
               }
             }
-            // cttcycle++;
-            // if (cttcycle == 4) { cttcycle = 0; }
 
             // Generator outputs:
             for (int id = 0; id < 4; id++) {
@@ -476,12 +501,12 @@ void AuxTask(void * parameter){
             }
 
             if (cttcycle == 0) {
-              tcount2queue.push(ESP.getCycleCount()); 
-              // xTaskNotify(writing1, 0, eNoAction);
+              tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
             }
+
             cttcycle++;
-            if (cttcycle == CTTRatio) { cttcycle = 0; }
+            if (cttcycle >= CTTRatio) { cttcycle = 0; }
 
             
         } else if (controlling && !debugmode) {  // If Control Mode is on:
@@ -492,7 +517,9 @@ void AuxTask(void * parameter){
             // uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
 
             tcount2queue.clear();
-            tcount2queue.push(ESP.getCycleCount()); 
+            tcount2queue.push(timerReadMicros(timer0cfg)-timecounter2);
+            timecounter2 = timerReadMicros(timer0cfg);
+            tcount2queue.push(timecounter2);
             
             controlqueue.clear();
 
@@ -530,8 +557,7 @@ void AuxTask(void * parameter){
             // xTaskNotify(writing1, 0, eNoAction);
             uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
 
-            // timecounter2 = ESP.getCycleCount() - timecounter2;
-            tcount2queue.push(ESP.getCycleCount()); 
+            tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
 
         } else if (controlling && debugmode) {
 
@@ -614,7 +640,7 @@ void MainTask(void * parameter){
   uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
-  uint32_t timecounter1,timecounter1a,timecounter2;
+  uint32_t timesample,timetask1,timetask2;
 
   uint8_t errorflags;  // Errors: None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout2  | TaskNotifyTimeout1  
 
@@ -639,8 +665,6 @@ void MainTask(void * parameter){
             uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
             if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; } 
 
-            timecounter1 = ESP.getCycleCount();
-
             tdata.nbytes = 0;                      
             
             ctt = 0;
@@ -663,8 +687,6 @@ void MainTask(void * parameter){
                   else { ctt = ctt + 12; }
                 }
             }
-
-            timecounter1a = ESP.getCycleCount() - timecounter1;
       
             // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)2);
             // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout           
@@ -723,20 +745,22 @@ void MainTask(void * parameter){
               }                            
             }
 
-            timecounter1 = ESP.getCycleCount() - timecounter1;
+            timesample = tcount2queue.pop(); // Tempo amostragem
 
-            timecounter2 = tcount2queue.pop();
-            timecounter2 = tcount2queue.pop() - timecounter2;
+            timetask1 = timerReadMicros(timer0cfg) - tcount2queue.pop();  // Tempo na task 1
 
-            timecounter1 = (timecounter1 >> 4) & 0xFFFF;
-            tdata.data[ctt++] = (timecounter1 >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter1 & 0xFF;
-            timecounter1a = (timecounter1a >> 4) & 0xFFFF;
-            tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter1a & 0xFF;
-            timecounter2 = (timecounter2 >> 4) & 0xFFFF;
-            tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter2 & 0xFF;
+            timetask2 = tcount2queue.pop(); // Tempo na task 2
+
+            
+            // timecounter1 = (timecounter1 >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timesample >> 8) & 0xFF;
+            tdata.data[ctt++] = timesample & 0xFF;
+            // timecounter1a = (timecounter1a >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
+            tdata.data[ctt++] = timetask1 & 0xFF;
+            // timecounter2 = (timecounter2 >> 4) & 0xFFFF;
+            tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
+            tdata.data[ctt++] = timetask2 & 0xFF;
             tdata.data[ctt++] = errorflags;
             tdata.nbytes = ctt;
 
@@ -763,8 +787,6 @@ void MainTask(void * parameter){
             uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
             if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }          
 
-            timecounter1 = ESP.getCycleCount();
-
             if (imubus[idRefIMU] != 0) {
               if (imutype[idRefIMU] == 0) {
                 xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
@@ -779,8 +801,6 @@ void MainTask(void * parameter){
                 xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
               }            
             }
-
-            timecounter1a = ESP.getCycleCount() - timecounter1;
 
             // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
             // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
@@ -895,6 +915,8 @@ void MainTask(void * parameter){
               else if (lastout < -1.0) { lastout = -1.0; errorflags = errorflags | 0x40; }
 
             }
+
+            timetask1 = timerReadMicros(timer0cfg);
           
             // Sending data to the host computer: --------------------------
             // The first three bytes are used for synchronization. 
@@ -921,21 +943,26 @@ void MainTask(void * parameter){
             *(float *) &tdata.data[ctt] = xerr;
             ctt = ctt + 4;
             tdata.data[ctt++] = ctrlflags;
-            timecounter1 = (ESP.getCycleCount()-timecounter1) >> 4;
-            tdata.data[ctt++] = (timecounter1 >> 8 & 0xFF);
-            tdata.data[ctt++] = timecounter1 & 0xFF;
-            timecounter1a = (timecounter1a >> 4) & 0xFFFF;
-            tdata.data[ctt++] = (timecounter1a >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter1a & 0xFF;
-            if (!debugmode) {
-              timecounter2 = tcount2queue.pop();
-              timecounter2 = tcount2queue.pop() - timecounter2;
-              timecounter2 = (timecounter2 >> 4) & 0xFFFF;
-            } else {
-              timecounter2 = 0;
-            }          
-            tdata.data[ctt++] = (timecounter2 >> 8) & 0xFF;
-            tdata.data[ctt++] = timecounter2 & 0xFF;
+
+            timesample = tcount2queue.pop(); // Tempo amostragem
+
+            timetask1 = timetask1 - tcount2queue.pop();  // Tempo na task 1
+
+            timetask2 = tcount2queue.pop(); // Tempo na task 2
+
+            tdata.data[ctt++] = (timesample >> 8 & 0xFF);
+            tdata.data[ctt++] = timesample & 0xFF;
+            tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
+            tdata.data[ctt++] = timetask1 & 0xFF;
+            // if (!debugmode) {
+            //   timetask2 = tcount2queue.pop();
+            //   timetask2 = tcount2queue.pop() - timetask2;
+            //   timetask2 = (timetask2 >> 4) & 0xFFFF;
+            // } else {
+            //   timetask2 = 0;
+            // }          
+            tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
+            tdata.data[ctt++] = timetask2 & 0xFF;
             tdata.data[ctt++] = errorflags;
             tdata.nbytes = ctt;
 
@@ -954,8 +981,10 @@ void MainTask(void * parameter){
       }
 
       if (tdata.nbytes > 0) {
+        // timecounter1a = ESP.getCycleCount();
         Serial.write(tdata.data,tdata.nbytes);
         tdata.nbytes = 0;
+        // timecounter1a = ESP.getCycleCount() - timecounter1a;
       }
 
       /*
@@ -971,13 +1000,52 @@ void MainTask(void * parameter){
             if (!reading && !controlling) { Serial.write('k'); }
             break;
 
+          case 'b':
+            // Set baud rate: 0 = 115200, 1 = 500000, 2 = 921600, 3 = 1000000
+            if (!reading && !controlling) {
+              uint8_t newbaud = Serial.read(); 
+              Serial.write('b');
+              Serial.write(newbaud);
+              Serial.end();
+              switch (newbaud) {
+                case 0:
+                  baudrate = 115200;
+                  break;
+                case 1:
+                  baudrate = 500000;
+                  break;
+                case 2:
+                  baudrate = 921600;
+                  break;
+                case 3:
+                  baudrate = 1000000;
+                  break;
+                default:
+                  baudrate = 500000;
+              }
+              Serial.begin(baudrate);
+              File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
+              if(!file){ 
+                Serial.print("er0"); 
+              } else {
+                file.write(&newbaud,1);
+                file.close();
+              }
+            }
+            break;
+
           case 's':
             if (!controlling) {
+              timerStop(timer0cfg);
+              timerRestart(timer0cfg);
+              timerStart(timer0cfg);
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
               xEventGroupClearBits(xEventGroup,0x03); 
               TickType_t actualtcount = xTaskGetTickCount();
-              xLastWakeTime0 = actualtcount - xFrequency0;
-              xLastWakeTime1 = actualtcount - xFrequency1;
+              // xLastWakeTime0 = actualtcount - xFrequency0;
+              // xLastWakeTime1 = actualtcount - xFrequency1;
+              xLastWakeTime0 = xTaskGetTickCount();
+              xLastWakeTime1 = xTaskGetTickCount();
               ctcycle = 0;
               cttcycle = 0;
               reading = true;
@@ -1223,6 +1291,10 @@ void MainTask(void * parameter){
             break;
 
           case 'r':
+            timerStart(timer0cfg);
+            uint32_t aaaa = ESP.getCycleCount();
+            uint64_t bbb = timerRead(timer0cfg);
+            uint64_t aaa = timerReadMicros(timer0cfg);
             Serial.println("--------");
             Serial.println(imubus[0]);
             Serial.println(imutype[0]);
@@ -1230,6 +1302,13 @@ void MainTask(void * parameter){
             Serial.println(imuenable[0]);
             Serial.println(imuextra[0]);
             Serial.println(initIMU(0));
+            Serial.println("-------");
+            aaaa = ESP.getCycleCount() - aaaa;
+            bbb = timerRead(timer0cfg) - bbb;
+            aaa = timerReadMicros(timer0cfg) - aaa;
+            Serial.println(aaaa);
+            Serial.println(bbb);
+            Serial.println(aaa);
             // lsms[0].setI2CBus(&WireA);
             // lsms[0].changeI2CAddress(0x6B);
             // for (int tt = 0; tt < 3; tt++) {
@@ -1436,8 +1515,11 @@ void MainTask(void * parameter){
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(500000);
+  // Serial.begin(500000);
   // Serial.begin(115200);
   Serial.setTimeout(10);
+
+  timer0cfg = timerBegin(0, 2, true);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);
@@ -1474,6 +1556,8 @@ void setup() {
   xEventGroup = xEventGroupCreate();
 
   loadFlashData();
+  Serial.end();
+  Serial.begin(baudrate);
 
   for (int ix = 0; ix < 3; ix++) {
     lsms[ix].setFusionWeights(&fusionweights[0]);
