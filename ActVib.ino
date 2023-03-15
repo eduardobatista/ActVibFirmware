@@ -385,6 +385,7 @@ void loadFlashData() {
   } else {
     uint8_t aux;
     file.read(&aux,1);
+    file.close();
     switch (aux) {
       case 0:
         baudrate = 115200;
@@ -400,7 +401,7 @@ void loadFlashData() {
         break;
       default:
         baudrate = 500000;
-    }
+    }    
   }
 }
 
@@ -1004,7 +1005,14 @@ void MainTask(void * parameter){
             // Set baud rate: 0 = 115200, 1 = 500000, 2 = 921600, 3 = 1000000
             if (!reading && !controlling) {
               uint8_t newbaud = Serial.read(); 
-              Serial.write('b');
+              File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
+              if(!file){ 
+                Serial.print("e0"); 
+              } else {
+                file.write(&newbaud,1);
+                file.close();
+              }
+              Serial.write('k');
               Serial.write(newbaud);
               Serial.end();
               switch (newbaud) {
@@ -1023,14 +1031,8 @@ void MainTask(void * parameter){
                 default:
                   baudrate = 500000;
               }
-              Serial.begin(baudrate);
-              File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
-              if(!file){ 
-                Serial.print("er0"); 
-              } else {
-                file.write(&newbaud,1);
-                file.close();
-              }
+              Serial.end();
+              Serial.begin(baudrate);              
             }
             break;
 
@@ -1534,6 +1536,7 @@ void setup() {
     Serial.println("SPIFFS successfully mounted!");
     Serial.println( SPIFFS.totalBytes());
   }
+  // SPIFFS.remove("/baudrate.dat");
 
   WireA.begin();
   WireA.setClock(1000000L);
