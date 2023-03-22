@@ -379,30 +379,30 @@ void loadFlashData() {
     file.close();
     Serial.println("Predist data read successfully.");
   }
-  file = SPIFFS.open("/baudrate.dat",FILE_READ);
-  if (!file) {
-    baudrate = 500000;
-  } else {
-    uint8_t aux;
-    file.read(&aux,1);
-    file.close();
-    switch (aux) {
-      case 0:
-        baudrate = 115200;
-        break;
-      case 1:
-        baudrate = 500000;
-        break;
-      case 2:
-        baudrate = 921600;
-        break;
-      case 3:
-        baudrate = 1000000;
-        break;
-      default:
-        baudrate = 500000;
-    }    
-  }
+  // file = SPIFFS.open("/baudrate.dat",FILE_READ);
+  // if (!file) {
+  //   baudrate = 500000;
+  // } else {
+  //   uint8_t aux;
+  //   file.read(&aux,1);
+  //   file.close();
+  //   switch (aux) {
+  //     case 0:
+  //       baudrate = 115200;
+  //       break;
+  //     case 1:
+  //       baudrate = 500000;
+  //       break;
+  //     case 2:
+  //       baudrate = 921600;
+  //       break;
+  //     case 3:
+  //       baudrate = 1000000;
+  //       break;
+  //     default:
+  //       baudrate = 500000;
+  //   }    
+  // }
 }
 
 /*
@@ -1005,13 +1005,13 @@ void MainTask(void * parameter){
             // Set baud rate: 0 = 115200, 1 = 500000, 2 = 921600, 3 = 1000000
             if (!reading && !controlling) {
               uint8_t newbaud = Serial.read(); 
-              File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
-              if(!file){ 
-                Serial.print("e0"); 
-              } else {
-                file.write(&newbaud,1);
-                file.close();
-              }
+              // File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
+              // if(!file){ 
+              //   Serial.print("e0"); 
+              // } else {
+              //   file.write(&newbaud,1);
+              //   file.close();
+              // }
               Serial.write('k');
               Serial.write(newbaud);
               Serial.end();
