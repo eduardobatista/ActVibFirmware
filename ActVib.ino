@@ -13,7 +13,8 @@
 #include <MCP4725.h>
 #include <ADS1X15.h>
 #include "MPU6050A.h"
-#include "SparkFunLSM6DS3.h"
+// #include "SparkFunLSM6DS3.h"
+#include "LSM6DS3ESP32.h"
 
 #define BUF_SIZE 64
 #define LED_BUILTIN 2
@@ -36,13 +37,6 @@ uint32_t baudrate = 500000;
 TaskHandle_t reading1;
 TaskHandle_t writing1;
 
-// Struct for sensor's data
-// struct sensorsData{
-//   float xAcceLSM=0, yAcceLSM=0, zAcceLSM=0;
-//   float xGyroLSM=0, yGyroLSM=0, zGyroLSM=0;
-//   uint8_t MPUallData[17];
-//   int16_t valadc;
-// };
 struct transmitData{
   uint8_t data[60];
   uint8_t nbytes;
@@ -70,7 +64,8 @@ EventGroupHandle_t xEventGroup;
 
 // Declaring and array with two MPU instances at the I2C bus:
 MPU6050A mpus[3] = { MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA) };
-LSM6DS3 lsms[3] = { LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B) };
+// LSM6DS3 lsms[3] = { LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B) };
+LSM6DS3ESP32 lsms[3] = { LSM6DS3ESP32(0x6B), LSM6DS3ESP32(0x6B), LSM6DS3ESP32(0x6B)};
 int8_t imuenable[3] = {0,0,0};
 int8_t imutype[3] = {0,0,0};
 int8_t imubus[3] = {0,0,0};
@@ -243,7 +238,7 @@ int8_t initIMU(uint8_t IMUid) {
       lsms[IMUid].setSPIMode(imuaddress[IMUid]);      
     }
     lsms[IMUid].config((imuextra[IMUid]>>2) & 0x07, imuextra[IMUid] & 0x03, (imuextra[IMUid]>>5) & 0x07);
-    lsms[IMUid].readRawAccelX();
+    // lsms[IMUid].readSensor(0);
   }
 
   // IMU connection check:
@@ -259,12 +254,12 @@ int8_t initIMU(uint8_t IMUid) {
     if (aux != IMU_SUCCESS) { delay(1); aux = lsms[IMUid].begin(); }         
     if (aux == IMU_SUCCESS) {
       // Some readings seem to be need to kick start the automatic readings:
-      lsms[IMUid].readRawAccelX();
+      lsms[IMUid].readSensor(0);
       delay(1);
       lsms[IMUid].readRawTemp(); 
       delay(1);
       return -1; 
-    } else { return -2; }            
+    } else { return aux; }            
   }
 
 }
@@ -1207,7 +1202,7 @@ void MainTask(void * parameter){
                 while (flaginitIMU >= 0) { delay(1); }
               }              
               if (flaginitIMU == -1) { Serial.write("ok!"); } 
-              else { Serial.write("err"); }               
+              else { Serial.write("er"); Serial.write(flaginitIMU); }               
             }   
             break;
 
@@ -1293,36 +1288,36 @@ void MainTask(void * parameter){
             break;
 
           case 'r':
-            timerStart(timer0cfg);
-            uint32_t aaaa = ESP.getCycleCount();
-            uint64_t bbb = timerRead(timer0cfg);
-            uint64_t aaa = timerReadMicros(timer0cfg);
-            Serial.println("--------");
-            Serial.println(imubus[0]);
-            Serial.println(imutype[0]);
-            Serial.println(imuaddress[0]);
-            Serial.println(imuenable[0]);
-            Serial.println(imuextra[0]);
-            Serial.println(initIMU(0));
-            Serial.println("-------");
-            aaaa = ESP.getCycleCount() - aaaa;
-            bbb = timerRead(timer0cfg) - bbb;
-            aaa = timerReadMicros(timer0cfg) - aaa;
-            Serial.println(aaaa);
-            Serial.println(bbb);
-            Serial.println(aaa);
-            // lsms[0].setI2CBus(&WireA);
+            // timerStart(timer0cfg);
+            // uint32_t aaaa = ESP.getCycleCount();
+            // uint64_t bbb = timerRead(timer0cfg);
+            // uint64_t aaa = timerReadMicros(timer0cfg);
+            // Serial.println("--------");
+            // Serial.println(imubus[0]);
+            // Serial.println(imutype[0]);
+            // Serial.println(imuaddress[0]);
+            // Serial.println(imuenable[0]);
+            // Serial.println(imuextra[0]);
+            // Serial.println(initIMU(0));
+            // Serial.println("-------");
+            // aaaa = ESP.getCycleCount() - aaaa;
+            // bbb = timerRead(timer0cfg) - bbb;
+            // aaa = timerReadMicros(timer0cfg) - aaa;
+            // Serial.println(aaaa);
+            // Serial.println(bbb);
+            // Serial.println(aaa);
+            // lsms[0].setI2CBus(&WireB);
             // lsms[0].changeI2CAddress(0x6B);
-            // for (int tt = 0; tt < 3; tt++) {
-            //   lsms[0].begin();
-            //   delay(2);
-            // }
-            // uint8_t readCheck;
-            // lsms[0].readRegister(&readCheck, LSM6DS3_ACC_GYRO_WHO_AM_I_REG);
-            // Serial.println(readCheck);
+            for (int tt = 0; tt < 3; tt++) {
+              lsms[0].begin();
+              delay(2);
+            }
+            uint8_t readCheck;
+            lsms[0].readRegister(&readCheck, WHO_AM_I);
+            Serial.println(readCheck);
             // Serial.println(lsms[0].commInterface);
-            // Serial.println(lsms[0].readFloatAccelX());
-            // Serial.println(lsms[0].readRawTemp());
+            Serial.println(lsms[0].readFloatAccel(0));
+            Serial.println(lsms[0].readRawTemp());
             // Serial.println(lsms[1].commInterface);
             // Serial.println(lsms[2].commInterface);
             break;          
