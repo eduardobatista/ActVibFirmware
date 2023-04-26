@@ -79,8 +79,9 @@ MCP4725 mcps[2] = { MCP4725(0x61,&WireA), MCP4725(0x60,&WireA) };
 // Declaring ADC:
 uint8_t adcconfig[3] = {0,0,0};
 bool adcenablemap[4] = {false,false,false,false}; 
-uint8_t nextadc,lastadc = 0;
-uint8_t adcseq[4] = {0,0,0,0};
+// uint8_t nextadc,lastadc = 0;
+// uint8_t adcseq[4] = {0,0,0,0};
+uint8_t adcsel = 0;
 uint8_t adctype = 0; // 0 for ADS1115 or 1 for ADS1015
 ADS1115 adc11(0x4B,&WireA);
 ADS1015 adc10(0x4B,&WireA);
@@ -272,19 +273,22 @@ int8_t initIMU(uint8_t IMUid) {
 int8_t initADC(void) {
     adc->setGain((1 << adcconfig[1]) >> 1);
     adc->setDataRate(adcconfig[2]); 
+    adcsel = 0;
     for (int iii = 0; iii < 4; iii++) {
       adcenablemap[iii] = (((adcconfig[0] >> iii) & 0x01) == 1);
+      if (adcenablemap[iii] == 1) { adcsel = iii; }
     }            
     if ((adcconfig[0] & 0x0F) > 0) {            
       adc->setMode(0);
-      nextadc = 0; 
-      for (int iii = 0; iii < 4; iii++) {
-        while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
-        adcseq[iii] = nextadc;
-        nextadc = (nextadc+1) & 0x03;
-      }  
-      nextadc = 0;
-      adc->readADC(adcseq[0]);
+      // nextadc = 0; 
+      // for (int iii = 0; iii < 4; iii++) {
+        // while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
+        // adcseq[iii] = nextadc;
+        // nextadc = (nextadc+1) & 0x03;
+      // }
+      // nextadc = 0;
+      // adc->readADC(adcseq[0]);
+      adc->readADC(adcsel);
     } else {
       adc->setMode(1);
     }             
@@ -486,12 +490,13 @@ void AuxTask(void * parameter){
             // ADC readings:
             if ((adcconfig[0] & 0x0F) > 0) {
               
-              if (adcreadings.count() == 0) { nextadc = 0; }
+              // if (adcreadings.count() == 0) { nextadc = 0; }
               
-              if (adcreadings.count() < 4) {  // TODO: change the 4 here to accomodate other sampling rates.
+              if (adcreadings.count() < CTTRatio) {  // TODO: change the 4 here to accomodate other sampling rates.
                 adcreadings.push(adc->getValue());
-                nextadc = (nextadc+1) & 0x03;
-                adc->requestADC(adcseq[nextadc]); 
+                // nextadc = (nextadc+1) & 0x03;
+                // adc->requestADC(adcseq[nextadc]);
+                adc->requestADC(adcsel); 
               }
 
             }
@@ -1417,7 +1422,11 @@ void MainTask(void * parameter){
               while (flaginitADC > 0) { delay(1); }
               if (flaginitADC == 0) {
                 Serial.write("KA");
-                Serial.write(&adcseq[0],4);
+                Serial.write(adcsel); // Written four times to maintain compatibility
+                Serial.write(adcsel);
+                Serial.write(adcsel);
+                Serial.write(adcsel);
+                // Serial.write(&adcseq[0],4);
               } else {
                 Serial.write("e!");
               }
