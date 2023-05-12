@@ -39,12 +39,11 @@ struct transmitData{
   uint8_t nbytes;
 };
 
-int num = 20;  
-//Queue used to exchange data between reading and writing tasks
-// Queue<sensorsData> queue = Queue<sensorsData>(num); // Queue of max num 'sensorsData', where 'sensorsData' is a struct
-// Queue<transmitData> queue = Queue<transmitData>(num);
-
+// Queues:
 Queue<float> controlqueue = Queue<float>(2);
+Queue<uint64_t> tcount2queue = Queue<uint64_t>(3);
+Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(28),Queue<uint8_t>(28),Queue<uint8_t>(28)};
+Queue<uint16_t> adcreadings = Queue<uint16_t>(8);
 
 
 // Timing variables: -----------------------------------------------------------------------------
@@ -61,14 +60,12 @@ EventGroupHandle_t xEventGroup;
 
 // Declaring and array with two MPU instances at the I2C bus:
 MPU6050A mpus[3] = { MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA), MPU6050A(0x68,&WireA) };
-// LSM6DS3 lsms[3] = { LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B), LSM6DS3(I2C_MODE,0x6B) };
 LSM6DS3ESP32 lsms[3] = { LSM6DS3ESP32(0x6B), LSM6DS3ESP32(0x6B), LSM6DS3ESP32(0x6B)};
 int8_t imuenable[3] = {0,0,0};
 int8_t imutype[3] = {0,0,0};
 int8_t imubus[3] = {0,0,0};
 int8_t imuaddress[3] = {0,0,0};
 uint8_t imuextra[3] = {0,0,0};
-Queue<uint8_t> lastimureadings[3] = {Queue<uint8_t>(28),Queue<uint8_t>(28),Queue<uint8_t>(28)};
 
 // Declaring array of MCPs:
 MCP4725 mcps[2] = { MCP4725(0x61,&WireA), MCP4725(0x60,&WireA) };
@@ -76,14 +73,11 @@ MCP4725 mcps[2] = { MCP4725(0x61,&WireA), MCP4725(0x60,&WireA) };
 // Declaring ADC:
 uint8_t adcconfig[3] = {0,0,0};
 bool adcenablemap[4] = {false,false,false,false}; 
-// uint8_t nextadc,lastadc = 0;
-// uint8_t adcseq[4] = {0,0,0,0};
 uint8_t adcsel = 0;
 uint8_t adctype = 0; // 0 for ADS1115 or 1 for ADS1015
 ADS1115 adc11(0x4B,&WireA);
 ADS1015 adc10(0x4B,&WireA);
 ADS1X15* adc;
-Queue<uint16_t> adcreadings = Queue<uint16_t>(8);
 int8_t flaginitADC = 0;
 
 /* 
@@ -152,11 +146,6 @@ uint8_t canalcontrole = 1;  // Definition of the actuator output used for inject
 float xerr = 0.0;  // Error signal for the control algorithm (corresponds to the reading of the error accelerometer).
 float xref = 0.0;  // Reference signal for the control algorithm (corresponds to the reading of the ref. accelerometer).
 float xreff = 0.0;  // xref - (feedback filter output). This signal is the input for the control algorithm.
-int dclevel = 0;
-float maxamplevel = 0.0;
-int satlevel = 0;
-// int outputaux = 0;  // Stores the corresponding integer value of the control signal before sending it to the DAC output. 
-// int senddataaux = 0;
 int lastsenddataaux = 0;
 float lastout = 0;  // The last (float) value of the control signal, which feeds the feedback filter.7
 unsigned char ctrlflags = 0;  // Used for indicating that saturation of the control signal has occurred.
@@ -179,7 +168,6 @@ void writeOutput(int id, float valf) {
       outscaler[id].evalOut(valf);  // This one registers the converted value (without predistortion).
       valf = valf * evalPoly(fabsf(valf),predistorders[id],&predistcoefs[10*id]);  // Adjust sample amplitude.
       val = outscaler[id].dclevel - outscaler[id].evalOutNoReg(valf);
-      // val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
     } else {
       val = outscaler[id].dclevel - outscaler[id].evalOut(valf);
     }
@@ -189,6 +177,7 @@ void writeOutput(int id, float valf) {
       dacWrite(23+id, val & 0xFF);
     }
 }
+
 void zeroOutput(int id) {
     outscaler[id].lastwrittenout = 0;
     if (id < 2) {      
@@ -277,14 +266,6 @@ int8_t initADC(void) {
     }            
     if ((adcconfig[0] & 0x0F) > 0) {            
       adc->setMode(0);
-      // nextadc = 0; 
-      // for (int iii = 0; iii < 4; iii++) {
-        // while ( adcenablemap[nextadc] == 0  ) {  nextadc = (nextadc+1) & 0x03; }
-        // adcseq[iii] = nextadc;
-        // nextadc = (nextadc+1) & 0x03;
-      // }
-      // nextadc = 0;
-      // adc->readADC(adcseq[0]);
       adc->readADC(adcsel);
     } else {
       adc->setMode(1);
@@ -375,30 +356,6 @@ void loadFlashData() {
     file.close();
     Serial.println("Predist data read successfully.");
   }
-  // file = SPIFFS.open("/baudrate.dat",FILE_READ);
-  // if (!file) {
-  //   baudrate = 500000;
-  // } else {
-  //   uint8_t aux;
-  //   file.read(&aux,1);
-  //   file.close();
-  //   switch (aux) {
-  //     case 0:
-  //       baudrate = 115200;
-  //       break;
-  //     case 1:
-  //       baudrate = 500000;
-  //       break;
-  //     case 2:
-  //       baudrate = 921600;
-  //       break;
-  //     case 3:
-  //       baudrate = 1000000;
-  //       break;
-  //     default:
-  //       baudrate = 500000;
-  //   }    
-  // }
 }
 
 /*
@@ -406,7 +363,6 @@ void loadFlashData() {
 */ 
 int8_t flaginitIMU = -1; 
 uint8_t cttcycle = 0; 
-Queue<uint64_t> tcount2queue = Queue<uint64_t>(3);
 bool flagzeroed = false;
 
 uint64_t nextsampletime = 0;
@@ -437,13 +393,9 @@ uint64_t nextsampletime = 0;
 =====================================================================================*/ 
 void AuxTask(void * parameter){
 
-  uint32_t auxxxx = 0;  
-  transmitData tdata;
-  int ctt = 0;
   uint64_t timecounter2;
   uint8_t imuaux[14];
   EventBits_t uxBits;
-  float predistaux = 0;  
   uint64_t timeraux = 0;
   uint64_t timeleft = 0;
   uint32_t ccountaux = 0;
@@ -476,10 +428,8 @@ void AuxTask(void * parameter){
                   if (imuenable[id] == 1) {  
                     if (imubus[id] == 0) {
                       if (imutype[id] == 0) {
-                        // mpus[id].readData(&lastimureadings[id][0]);
                         mpus[id].readData(&imuaux[0]);
                       } else {
-                        // lsms[id].readRegisterRegion(&lastimureadings[id][0],0x22,12);
                         lsms[id].readRegisterRegion(&imuaux[0],0x22,12);                      
                       }
                       lastimureadings[id].clear();
@@ -502,23 +452,17 @@ void AuxTask(void * parameter){
 
             // ADC readings:
             if ((adcconfig[0] & 0x0F) > 0) {
-              
-              // if (adcreadings.count() == 0) { nextadc = 0; }
-              
               if (adcreadings.count() < CTTRatio) {  // TODO: change the 4 here to accomodate other sampling rates.
                 adcreadings.push(adc->getValue());
-                // nextadc = (nextadc+1) & 0x03;
-                // adc->requestADC(adcseq[nextadc]);
                 adc->requestADC(adcsel); 
               }
-
             }
 
             if (cttcycle == 0) {
               // tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
               tcount2queue.push( (uint64_t)((ESP.getCycleCount() - ccountaux)>>8) );
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
-              uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 20);
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 20); // Wait notification from MainTask
             }
 
             cttcycle++;
@@ -530,7 +474,6 @@ void AuxTask(void * parameter){
             // Blocks until reaching the time for next sample: --------------------------------------------
             vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
             // --------------------------------------------------------------------------------------------
-            // uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
 
             tcount2queue.clear();
             tcount2queue.push(timerReadMicros(timer0cfg)-timecounter2);
@@ -541,11 +484,9 @@ void AuxTask(void * parameter){
 
             // Writing outputs:
             if (ctrltask == 0) {  // If controlling:       
-              // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
               writeOutput(canalperturb,siggen[canalperturb].lastf);
               writeOutput(canalcontrole,lastout); // TODO: WARNING!!!
             } else {  // If path modeling:
-              // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
               zeroOutput(canalperturb);
               writeOutput(canalcontrole,siggen[canalcontrole].lastf);
             }
@@ -570,7 +511,6 @@ void AuxTask(void * parameter){
             }
             
             // Notifies TASK 1:
-            // xTaskNotify(writing1, 0, eNoAction);
             tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
             uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
             
@@ -647,21 +587,13 @@ void MainTask(void * parameter){
   uint8_t sr = 0;  // Stores commands read from the computer host.
   char hascmd = 0;  // Used for indicating if command from the computer host needs to be treated before accepting new commands.
   int cthascmd = 0;  // Indicates if the cmd has been treated. TODO: check if it is important or not, maybe could be changed to a flag. 
-  uint8_t ctcycle = 0;
   uint8_t imuidd;
 
-  int32_t xrefdebug = 0;
-  int32_t xerrdebug = 0;
-
-  uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
   uint64_t timesample,timetask1,timetask2;
 
   uint8_t errorflags;  // Errors: None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout2  | TaskNotifyTimeout1  
-
-  uint32_t ulNotifiedValue;
-  BaseType_t retnotify = pdFALSE;
 
   EventBits_t uxBits;
 
@@ -704,10 +636,8 @@ void MainTask(void * parameter){
                 }
             }
       
-            // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)2);
-            // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout           
             // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
-            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2); 
             if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
 
             ctt = 3;
@@ -720,7 +650,6 @@ void MainTask(void * parameter){
                   int nbytes = 14;
                   if (imutype[id] == 1) { nbytes = 12; }
                   for (int iii = 0; iii < nbytes; iii++) {
-                    // tdata.data[ctt++] = lastimureadings[id][iii];
                     tdata.data[ctt++] = lastimureadings[id].pop();
                   }
                 }
@@ -739,7 +668,6 @@ void MainTask(void * parameter){
             
             // Send ADC Readings:
             if ((adcconfig[0] & 0x0F) > 0) {
-              // if ((adcreadings.count() < CTTRatio) || (adcreadings.count() > CTTRatio)) {
               if (adcreadings.count() != CTTRatio) {
                 errorflags = errorflags | 0x02; // Set IncompleteADCRead error
                 adcreadings.clear();
@@ -762,20 +690,15 @@ void MainTask(void * parameter){
             }
             
             timesample = tcount2queue.pop(); // Tempo amostragem
-            
             timerReadMicros(timer0cfg);
             timetask1 = timerReadMicros(timer0cfg) - tcount2queue.pop();  // Tempo na task 1
-
             timetask2 = tcount2queue.pop(); // Tempo na task 2
 
             
-            // timecounter1 = (timecounter1 >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timesample >> 8) & 0xFF;
             tdata.data[ctt++] = timesample & 0xFF;
-            // timecounter1a = (timecounter1a >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
             tdata.data[ctt++] = timetask1 & 0xFF;
-            // timecounter2 = (timecounter2 >> 4) & 0xFFFF;
             tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
             tdata.data[ctt++] = timetask2 & 0xFF;
             tdata.data[ctt++] = errorflags;
@@ -821,9 +744,6 @@ void MainTask(void * parameter){
               }            
             }
 
-            // retnotify = xTaskNotifyWait(0,0xffffffffUL,&ulNotifiedValue,(TickType_t)1);
-            // if (retnotify == pdFALSE) { errorflags = errorflags | 0x01; } // Set TaskNotifyTimeout
-
             // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
             uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
             if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; }
@@ -861,11 +781,9 @@ void MainTask(void * parameter){
 
             // Writing outputs:
             if (ctrltask == 0) {  // If controlling:       
-              // siggen[canalperturb].next();  // Evaluated elsewhere to avoid delays 
               writeOutputDebug(canalperturb,siggen[canalperturb].lastf);
               writeOutputDebug(canalcontrole,lastout);
             } else {  // If path modeling:
-              // siggen[canalcontrole].next(); // Evaluated elsewhere to avoid delays             
               zeroOutputDebug(canalperturb);
               writeOutputDebug(canalcontrole,siggen[canalcontrole].lastf);
             }
@@ -993,17 +911,14 @@ void MainTask(void * parameter){
 
         // If not reading nor controlling nor have data to treat, sleep for a while:
         while ( (Serial.available() == 0) && (tdata.nbytes == 0) ) {
-          // delayMicroseconds(50);
           vTaskDelay((TickType_t)1);
         }
 
       }
 
       if (tdata.nbytes > 0) {
-        // timecounter1a = ESP.getCycleCount();
         Serial.write(tdata.data,tdata.nbytes);
         tdata.nbytes = 0;
-        // timecounter1a = ESP.getCycleCount() - timecounter1a;
       }
 
       /*
@@ -1023,13 +938,6 @@ void MainTask(void * parameter){
             // Set baud rate: 0 = 115200, 1 = 500000, 2 = 921600, 3 = 1000000
             if (!reading && !controlling) {
               uint8_t newbaud = Serial.read(); 
-              // File file = SPIFFS.open("/baudrate.dat",FILE_WRITE);
-              // if(!file){ 
-              //   Serial.print("e0"); 
-              // } else {
-              //   file.write(&newbaud,1);
-              //   file.close();
-              // }
               Serial.write('k');
               Serial.write(newbaud);
               Serial.end();
@@ -1067,7 +975,6 @@ void MainTask(void * parameter){
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
               nextsampletime = 1000;
-              ctcycle = 0;
               cttcycle = 0;
               errorflags = 0;
               reading = true;
@@ -1285,54 +1192,9 @@ void MainTask(void * parameter){
             for (float auxX = -1.0; auxX <= 1.0; auxX = auxX + 0.1) {
               Serial.println(auxX * evalPoly(fabsf(auxX),predistorders[1],&predistcoefs[10]),10);
             }            
-            // unsigned char aux[4];
-            // aux[0] = Serial.read();
-            // aux[1] = Serial.read();
-            // aux[2] = Serial.read();
-            // aux[3] = Serial.read();
-            // float xn = *(float *) aux;
-            // aux[0] = Serial.read();
-            // aux[1] = Serial.read();
-            // aux[2] = Serial.read();
-            // aux[3] = Serial.read();
-            // float dn = *(float *) aux;
-            // float en = 0;
-            // //en = dn - fxnlms.filter(xn);
-            // //fxnlms.update(en);
-            // if (!isnan(xn) && !isnan(dn)) {
-            //   Serial.write('k');
-            //   en = dn - filtsec.filter(fxnlms.filter(xn));
-            //   fxnlms.update(en);   
-            //   *(float *) aux = en; 
-            //   Serial.write(aux,4);     
-            // } else {
-            //   //Serial.write('!');
-            //   //en = dn - fxnlms.filter(0);
-            //   //fxnlms.update(0);
-            // }
             break;
 
           case 'r':
-            // timerStart(timer0cfg);
-            // uint32_t aaaa = ESP.getCycleCount();
-            // uint64_t bbb = timerRead(timer0cfg);
-            // uint64_t aaa = timerReadMicros(timer0cfg);
-            // Serial.println("--------");
-            // Serial.println(imubus[0]);
-            // Serial.println(imutype[0]);
-            // Serial.println(imuaddress[0]);
-            // Serial.println(imuenable[0]);
-            // Serial.println(imuextra[0]);
-            // Serial.println(initIMU(0));
-            // Serial.println("-------");
-            // aaaa = ESP.getCycleCount() - aaaa;
-            // bbb = timerRead(timer0cfg) - bbb;
-            // aaa = timerReadMicros(timer0cfg) - aaa;
-            // Serial.println(aaaa);
-            // Serial.println(bbb);
-            // Serial.println(aaa);
-            // lsms[0].setI2CBus(&WireB);
-            // lsms[0].changeI2CAddress(0x6B);
             for (int tt = 0; tt < 3; tt++) {
               lsms[0].begin();
               delay(2);
@@ -1543,8 +1405,6 @@ void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(500000);
-  // Serial.begin(500000);
-  // Serial.begin(115200);
   Serial.setTimeout(10);
 
   timer0cfg = timerBegin(0, 2, true);
@@ -1562,7 +1422,6 @@ void setup() {
     Serial.println("SPIFFS successfully mounted!");
     Serial.println( SPIFFS.totalBytes());
   }
-  // SPIFFS.remove("/baudrate.dat");
 
   WireA.begin();
   WireA.setClock(1000000L);
