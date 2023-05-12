@@ -1,7 +1,5 @@
 #include <Wire.h>         // I2C
 #include <SPI.h>
-// #include <Ticker.h>       // Timing
-#include <Preferences.h>  // Allows recording preferences in non-volatile memory
 #include <math.h>         // Math
 
 #include <SPIFFS.h>
@@ -13,7 +11,6 @@
 #include <MCP4725.h>
 #include <ADS1X15.h>
 #include "MPU6050A.h"
-// #include "SparkFunLSM6DS3.h"
 #include "LSM6DS3ESP32.h"
 
 #define BUF_SIZE 64
@@ -412,6 +409,8 @@ uint8_t cttcycle = 0;
 Queue<uint64_t> tcount2queue = Queue<uint64_t>(3);
 bool flagzeroed = false;
 
+uint64_t nextsampletime = 0;
+
 
 /* ===== Auxiliary Task (Core 1 - Former Reading Task) ===================================
 
@@ -441,22 +440,36 @@ void AuxTask(void * parameter){
   uint32_t auxxxx = 0;  
   transmitData tdata;
   int ctt = 0;
-  uint32_t timecounter2;
+  uint64_t timecounter2;
   uint8_t imuaux[14];
   EventBits_t uxBits;
-  float predistaux = 0;
+  float predistaux = 0;  
+  uint64_t timeraux = 0;
+  uint64_t timeleft = 0;
+  uint32_t ccountaux = 0;
 
     for (;;) {        
 
         if (reading) {  // If Reading Mode is on:
 
-          vTaskDelayUntil(&xLastWakeTime1,xFrequency1);
+          // vTaskDelayUntil(&xLastWakeTime1,xFrequency1);
+          do {
+            timeraux = timerReadMicros(timer0cfg);
+            if (nextsampletime > timeraux) { 
+              timeleft = nextsampletime - timeraux;
+              delayMicroseconds(timeleft);
+            } else { timeleft = 0; }
+            timeraux = timerReadMicros(timer0cfg);
+          } while (timeraux < nextsampletime);
+          nextsampletime = nextsampletime + 1000;          
 
             if ( cttcycle == 0 ) {    
               tcount2queue.clear();
-              tcount2queue.push(timerReadMicros(timer0cfg)-timecounter2);
-              timecounter2 = timerReadMicros(timer0cfg);
+              timeraux = timerReadMicros(timer0cfg);
+              tcount2queue.push(timeraux-timecounter2);
+              timecounter2 = timeraux;
               tcount2queue.push(timecounter2);
+              ccountaux = ESP.getCycleCount();
               uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
               // Reading IMUS in the main I2C Bus:
               for (int id = 0; id < 3; id++) {
@@ -502,8 +515,10 @@ void AuxTask(void * parameter){
             }
 
             if (cttcycle == 0) {
-              tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
+              // tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
+              tcount2queue.push( (uint64_t)((ESP.getCycleCount() - ccountaux)>>8) );
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 20);
             }
 
             cttcycle++;
@@ -556,9 +571,9 @@ void AuxTask(void * parameter){
             
             // Notifies TASK 1:
             // xTaskNotify(writing1, 0, eNoAction);
-            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
-
             tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
+            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
+            
 
         } else if (controlling && debugmode) {
 
@@ -641,7 +656,7 @@ void MainTask(void * parameter){
   uint32_t auxxxx = 0;
   transmitData tdata;
   int ctt = 0;
-  uint32_t timesample,timetask1,timetask2;
+  uint64_t timesample,timetask1,timetask2;
 
   uint8_t errorflags;  // Errors: None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout2  | TaskNotifyTimeout1  
 
@@ -745,9 +760,10 @@ void MainTask(void * parameter){
                 }                
               }                            
             }
-
+            
             timesample = tcount2queue.pop(); // Tempo amostragem
-
+            
+            timerReadMicros(timer0cfg);
             timetask1 = timerReadMicros(timer0cfg) - tcount2queue.pop();  // Tempo na task 1
 
             timetask2 = tcount2queue.pop(); // Tempo na task 2
@@ -764,6 +780,8 @@ void MainTask(void * parameter){
             tdata.data[ctt++] = timetask2 & 0xFF;
             tdata.data[ctt++] = errorflags;
             tdata.nbytes = ctt;
+
+            uxBits = xEventGroupSetBits(xEventGroup, 0x04);
 
 
       } else if (controlling) {
@@ -1043,13 +1061,15 @@ void MainTask(void * parameter){
               timerStart(timer0cfg);
               for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
               xEventGroupClearBits(xEventGroup,0x03); 
-              TickType_t actualtcount = xTaskGetTickCount();
+              // TickType_t actualtcount = xTaskGetTickCount();
               // xLastWakeTime0 = actualtcount - xFrequency0;
               // xLastWakeTime1 = actualtcount - xFrequency1;
               xLastWakeTime0 = xTaskGetTickCount();
               xLastWakeTime1 = xTaskGetTickCount();
+              nextsampletime = 1000;
               ctcycle = 0;
               cttcycle = 0;
+              errorflags = 0;
               reading = true;
               controlling = false;
             }            
@@ -1083,7 +1103,7 @@ void MainTask(void * parameter){
             }
             break;
 
-          case 't':
+          case 't':                        
             reading = false; 
             controlling = false;
             // for (int id = 0; id < 4; id++) { writeOutput(id,0); } // Set outputs to zero after stopping.
@@ -1519,6 +1539,8 @@ void MainTask(void * parameter){
 
 // Startup configuration:
 void setup() {
+  btStop();
+
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(500000);
   // Serial.begin(500000);
