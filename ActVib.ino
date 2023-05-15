@@ -321,7 +321,7 @@ void getPaths() {
 void loadFlashData() {
   File file = SPIFFS.open("/wsec.dat",FILE_READ);
   if (!file) {
-    Serial.println("Secondary path file not found in memory.");
+    Serial.println("Sec path not found.");
   } else {
     Nsec = (int)(file.size() / sizeof(float));
     file.read((uint8_t *)&wsec[0],file.size());
@@ -333,7 +333,7 @@ void loadFlashData() {
   }
   file = SPIFFS.open("/wfbk.dat",FILE_READ);
   if (!file) {
-    Serial.println("Feedback path file not found in memory.");
+    Serial.println("Feedback not found in mem.");
   } else {
     Nfbk = (int)(file.size() / sizeof(float));
     file.read((uint8_t *)&wfbk[0],file.size());
@@ -344,7 +344,7 @@ void loadFlashData() {
   }
   file = SPIFFS.open("/predist.dat",FILE_READ);
   if (!file) {
-    Serial.println("Predist data not found in memory.");
+    Serial.println("Predist not found in mem.");
   } else {
     file.read(&predistorders[0],4);
     for (int i = 0; i < 4; i++) {
@@ -354,7 +354,7 @@ void loadFlashData() {
     file.read((uint8_t *)&predistcoefs[0],160);
     file.read((uint8_t *)&fusionweights[0],8);
     file.close();
-    Serial.println("Predist data read successfully.");
+    Serial.println("Success reading predist.");
   }
 }
 
@@ -462,7 +462,7 @@ void AuxTask(void * parameter){
               // tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
               tcount2queue.push( (uint64_t)((ESP.getCycleCount() - ccountaux)>>8) );
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
-              uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 20); // Wait notification from MainTask
+              // uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 20); // Wait notification from MainTask
             }
 
             cttcycle++;
@@ -911,7 +911,8 @@ void MainTask(void * parameter){
 
         // If not reading nor controlling nor have data to treat, sleep for a while:
         while ( (Serial.available() == 0) && (tdata.nbytes == 0) ) {
-          vTaskDelay((TickType_t)1);
+          // vTaskDelay((TickType_t)1);
+          delay(5);
         }
 
       }
@@ -1013,8 +1014,11 @@ void MainTask(void * parameter){
           case 't':                        
             reading = false; 
             controlling = false;
+            nextsampletime = 0;
+            // timerStop(timer0cfg);
             // for (int id = 0; id < 4; id++) { writeOutput(id,0); } // Set outputs to zero after stopping.
             flagzeroed = false;
+            Serial.println("Stopped!");
             break;
 
           case 'T':
@@ -1166,6 +1170,11 @@ void MainTask(void * parameter){
 
           case 'W':
             if (!reading && !controlling) { getPaths(); }
+            break;
+
+
+          case 'x':
+            Serial.println(SPIFFS.format());            
             break;
 
 
@@ -1398,10 +1407,8 @@ void MainTask(void * parameter){
 
 }
 
-
 // Startup configuration:
 void setup() {
-  btStop();
 
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(500000);
@@ -1417,10 +1424,10 @@ void setup() {
   adc10.begin();
 
   if(!SPIFFS.begin(true)){
-    Serial.println("An Error has occurred while mounting SPIFFS.");
+    Serial.println("SPIFFS failed.");
   } else {
-    Serial.println("SPIFFS successfully mounted!");
-    Serial.println( SPIFFS.totalBytes());
+    Serial.println("SPIFFS ok!");
+    Serial.println(SPIFFS.totalBytes());
   }
 
   WireA.begin();
@@ -1451,33 +1458,32 @@ void setup() {
     lsms[ix].setFusionWeights(&fusionweights[0]);
     mpus[ix].setFusionWeights(&fusionweights[0]);
   }
+
   
     // disableCore1WDT(); 
     // Inicialização Core 0 (Leitura)
     xTaskCreatePinnedToCore(
         AuxTask,            /* Task function          */
         "Auxiliary Task",     /* Name of the task       */ 
-        2048,               /* Stack size of the task */
+        4096,               /* Stack size of the task */
         NULL,               /* Parameter of the task  */
         2,                  /* Priority of the task   */
         &reading1,          /* Task handle to keep track of the task */
         1);                 /* Core 1 */
     delay(500); 
 
-    // disableCore1WDT();    // needed to start-up Reading task  
-
-    disableCore0WDT();
+    // disableCore0WDT();
     //  // Inicialização Core 0 (Leitura)
     xTaskCreatePinnedToCore(
         MainTask,            /* Task function          */
         "Main Task",     /* Name of the task       */ 
-        2048,               /* Stack size of the task */
+        4096,               /* Stack size of the task */
         NULL,               /* Parameter of the task  */
         2,                  /* Priority of the task   */
         &writing1,          /* Task handle to keep track of the task */
         0);                 /* Core 0 */
     delay(500); 
-  
+ 
 }
 
 void loop() {
