@@ -120,6 +120,8 @@ struct LSM6DS3Settings {
         uint8_t accelFifoEnabled = 0;
         uint8_t accelFifoDecimation = 1;
 
+        bool aliasingBWAuto = false;
+
         uint8_t tempEnabled = 1;
 
         uint8_t commMode = 1;
@@ -142,7 +144,7 @@ class LSM6DS3ESP32 {
 
         void setSPIMode(uint8_t CSPin);
 
-        void config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterBandwidth);
+        void config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterBandwidth, uint8_t ODR);
 
         status_t writeRegister(uint8_t offset, uint8_t dataToWrite);
         status_t readRegister(uint8_t* outputPointer, uint8_t offset);
@@ -177,9 +179,9 @@ class LSM6DS3ESP32 {
 
         // const uint8_t gyromap[5] = {125, 250, 500, 1000, 2000};   
         // Mapping to CTRL1XL, BW_XL:     
-	    const uint8_t bwmap[4] = {0x03, 0x02, 0x01, 0x00};
+	    const uint8_t bwmap[5] = {0x03, 0x03, 0x02, 0x01, 0x00};
         // Mapping to CTRL1_XL, FS_XL:
-        const uint8_t accmap[4] = {0x00, 0x02, 0x03, 0x01};
+        const uint8_t accmap[5] = {0x00, 0x00, 0x02, 0x03, 0x01};
 
         //Error checking
         uint16_t allOnesCounter;

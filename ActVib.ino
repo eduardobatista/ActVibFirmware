@@ -49,6 +49,8 @@ Queue<uint16_t> adcreadings = Queue<uint16_t>(8);
 // Timing variables: -----------------------------------------------------------------------------
 float F_SAMPLE = 250.0;  // Sampling frequency (Hz)
 float T_SAMPLE = 0.004;  // Sampling period in seconds
+uint16_t T_SAMPLE_us = 4000;  // Sampling period in microseconds
+uint32_t T_SAMPLE_cycles = 960000;  // Sampling period in cycles
 TickType_t xFrequency0 = 4;   // Main process will run at 4 ticks = 4 ms period
 TickType_t xLastWakeTime0; 
 TickType_t xFrequency1 = 1;  // Second process may be sped up by changing this value to 1 or 2; Default is 4.
@@ -224,7 +226,18 @@ int8_t initIMU(uint8_t IMUid) {
     } else { // SPI
       lsms[IMUid].setSPIMode(imuaddress[IMUid]);      
     }
-    lsms[IMUid].config((imuextra[IMUid]>>2) & 0x07, imuextra[IMUid] & 0x03, (imuextra[IMUid]>>5) & 0x07);
+    if (CTTRatio == 255) {
+      uint8_t ODR = 0x00;
+      if (T_SAMPLE_us < 1300) { ODR = 0x07; }
+      else if (T_SAMPLE_us < 2500) { ODR = 0x06; }
+      else if (T_SAMPLE_us < 5000) { ODR = 0x05; } 
+      else { ODR = 0x04; }
+      lsms[IMUid].config((imuextra[IMUid]>>2) & 0x07, imuextra[IMUid] & 0x03,
+                                              (imuextra[IMUid]>>5) & 0x07, ODR);
+    } else {
+      lsms[IMUid].config((imuextra[IMUid]>>2) & 0x07, imuextra[IMUid] & 0x03,
+                                              (imuextra[IMUid]>>5) & 0x07, 0x07);
+    }    
     // lsms[IMUid].readSensor(0);
   }
 
@@ -366,6 +379,7 @@ uint8_t cttcycle = 0;
 bool flagzeroed = false;
 
 uint64_t nextsampletime = 0;
+uint32_t cnextsampletime = 0;
 
 
 /* ===== Auxiliary Task (Core 1 - Former Reading Task) ===================================
@@ -399,21 +413,79 @@ void AuxTask(void * parameter){
   uint64_t timeraux = 0;
   uint64_t timeleft = 0;
   uint32_t ccountaux = 0;
+  uint32_t ctimeraux = 0;
+  uint32_t ctimeleft = 0;
 
     for (;;) {        
 
         if (reading) {  // If Reading Mode is on:
 
-          // vTaskDelayUntil(&xLastWakeTime1,xFrequency1);
-          do {
-            timeraux = timerReadMicros(timer0cfg);
-            if (nextsampletime > timeraux) { 
-              timeleft = nextsampletime - timeraux;
-              delayMicroseconds(timeleft);
-            } else { timeleft = 0; }
-            timeraux = timerReadMicros(timer0cfg);
-          } while (timeraux < nextsampletime);
-          nextsampletime = nextsampletime + 1000;          
+          if (CTTRatio == 255) {
+
+            // New Version:
+
+            ctimeleft = cnextsampletime - ESP.getCycleCount(); // Time left for next sample
+            do {              
+              // If time left is "positive" and it is worth to use a delay in microseconds:
+              if ( ((ctimeleft & 0x80000000) == 0) && ((ctimeleft >> 8) > 0) ) {              
+                delayMicroseconds( (ctimeleft >> 8) ); // ctimeleft/256 is always smaller than timeleft/240. Thus, this delay will always be smaller than time left.
+              }
+              ctimeleft = cnextsampletime - ESP.getCycleCount();
+            } while ((ctimeleft & 0x80000000) == 0);
+            cnextsampletime = cnextsampletime + T_SAMPLE_cycles;
+
+            uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
+
+            // Generator outputs:
+            for (int id = 0; id < 4; id++) {
+                if (siggen[id].enabled) { 
+                  siggen[id].next();
+                  writeOutput(id,siggen[id].lastf); 
+                }
+                else { zeroOutput(id); }
+            }
+
+            // ADC readings:
+            if ((adcconfig[0] & 0x0F) > 0) {
+                adcreadings.clear();
+                adcreadings.push(adc->getValue());
+                adc->requestADC(adcsel); 
+            }    
+             
+            // Reading IMUS in the main I2C Bus:
+            for (int id = 0; id < 3; id++) {
+                if (imuenable[id] == 1) {  
+                  if (imubus[id] == 0) {
+                    if (imutype[id] == 0) {
+                      mpus[id].readData(&imuaux[0]);
+                    } else {
+                      lsms[id].readRegisterRegion(&imuaux[0],0x22,12);                      
+                    }
+                    lastimureadings[id].clear();
+                    for (int idd = 0; idd < 14; idd++) {
+                      lastimureadings[id].push(imuaux[idd]);
+                    }                    
+                  }                        
+                }
+            }
+            uxBits = xEventGroupSetBits(xEventGroup, 0x02);
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 4); // Wait notification from MainTask
+
+
+          } else {
+
+            // Old version, kept for compatibility purposes:
+
+            do {
+              timeraux = timerReadMicros(timer0cfg);
+              if (nextsampletime > timeraux) { 
+                timeleft = nextsampletime - timeraux;
+                delayMicroseconds(timeleft);
+              } else { timeleft = 0; }
+              timeraux = timerReadMicros(timer0cfg);
+            } while (timeraux < nextsampletime);
+
+            nextsampletime = nextsampletime + 1000;
 
             if ( cttcycle == 0 ) {    
               tcount2queue.clear();
@@ -423,6 +495,26 @@ void AuxTask(void * parameter){
               tcount2queue.push(timecounter2);
               ccountaux = ESP.getCycleCount();
               uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask
+            }
+
+            // ADC readings:
+            if ((adcconfig[0] & 0x0F) > 0) {
+              if (adcreadings.count() < CTTRatio) {  // TODO: change the 4 here to accomodate other sampling rates.
+                adcreadings.push(adc->getValue());
+                adc->requestADC(adcsel); 
+              }
+            }  
+
+            // Generator outputs:
+            for (int id = 0; id < 4; id++) {
+                if (siggen[id].enabled) { 
+                  siggen[id].next();
+                  writeOutput(id,siggen[id].lastf); 
+                }
+                else { zeroOutput(id); }
+            }     
+
+            if ( cttcycle == 0 ) {    
               // Reading IMUS in the main I2C Bus:
               for (int id = 0; id < 3; id++) {
                   if (imuenable[id] == 1) {  
@@ -439,26 +531,6 @@ void AuxTask(void * parameter){
                     }                        
                   }
               }
-            }
-
-            // Generator outputs:
-            for (int id = 0; id < 4; id++) {
-                if (siggen[id].enabled) { 
-                  siggen[id].next();
-                  writeOutput(id,siggen[id].lastf); 
-                }
-                else { zeroOutput(id); }
-            }
-
-            // ADC readings:
-            if ((adcconfig[0] & 0x0F) > 0) {
-              if (adcreadings.count() < CTTRatio) {  // TODO: change the 4 here to accomodate other sampling rates.
-                adcreadings.push(adc->getValue());
-                adc->requestADC(adcsel); 
-              }
-            }
-
-            if (cttcycle == 0) {
               // tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
               tcount2queue.push( (uint64_t)((ESP.getCycleCount() - ccountaux)>>8) );
               uxBits = xEventGroupSetBits(xEventGroup, 0x02);
@@ -468,6 +540,7 @@ void AuxTask(void * parameter){
             cttcycle++;
             if (cttcycle >= CTTRatio) { cttcycle = 0; }
 
+          }
             
         } else if (controlling && !debugmode) {  // If Control Mode is on:
 
@@ -539,6 +612,7 @@ void AuxTask(void * parameter){
 
           // If not controlling nor reading, one can delay for a while:
           delay(1);
+          cnextsampletime = ESP.getCycleCount();
 
         }
 
@@ -592,6 +666,7 @@ void MainTask(void * parameter){
   transmitData tdata;
   int ctt = 0;
   uint64_t timesample,timetask1,timetask2;
+  uint32_t clastsampletime,ctimeaux,ccountaux = 0;
 
   uint8_t errorflags;  // Errors: None | None | None | None | None | IncompleteADCRead | TaskNotifyTimeout2  | TaskNotifyTimeout1  
 
@@ -601,110 +676,211 @@ void MainTask(void * parameter){
 
       if (reading) {
 
-            // Blocks until reaching the next sampling period: --------------------------------------------    
-            // vTaskDelayUntil(&xLastWakeTime0, xFrequency0);
-            // -------------------------------------------------------------------------------------------- 
-            // xTaskNotifyWait(0xffffffffUL,0xffffffffUL,&ulNotifiedValue,(TickType_t)0);
 
-            errorflags = 0;   
-            // Clear bits from EventGroup to wait for notifications/flags from AuxTask
-            uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
-            // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
-            uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
-            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; } 
+            if (CTTRatio == 255) {
 
-            tdata.nbytes = 0;                      
-            
-            ctt = 0;
-            // First 3 bytes for sync:
-            tdata.data[ctt++] = 0xF;
-            tdata.data[ctt++] = 0xF;
-            tdata.data[ctt++] = 0xF;
+              // New version:
 
-            // IMU Readings:
-            for (int id = 0; id < 3; id++) {
-                if (imuenable[id] == 1) {  
-                  if (imubus[id] != 0) {
-                    if (imutype[id] == 0) {
-                      mpus[id].readData(&tdata.data[ctt]);                    
-                    } else {
-                      lsms[id].readRegisterRegion(&tdata.data[ctt],0x22,12);
+              errorflags = 0;   
+              // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+              uxBits = xEventGroupClearBits(xEventGroup,0x07); // Clear bits 1 and 0
+              // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+              if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; };
+              clastsampletime = ESP.getCycleCount();
+              timesample = (clastsampletime - ctimeaux) / 240;
+              ctimeaux = clastsampletime;
+
+              tdata.nbytes = 0;                      
+              
+              ctt = 0;
+              // First 3 bytes for sync:
+              tdata.data[ctt++] = 0xF;
+              tdata.data[ctt++] = 0xF;
+              tdata.data[ctt++] = 0xF;
+
+              // IMU Readings:
+              for (int id = 0; id < 3; id++) {
+                  if (imuenable[id] == 1) {  
+                    if (imubus[id] != 0) {
+                      if (imutype[id] == 0) {
+                        mpus[id].readData(&tdata.data[ctt]);                    
+                      } else {
+                        lsms[id].readRegisterRegion(&tdata.data[ctt],0x22,12);
+                      }
+                    }
+                    if (imutype[id] == 0) { ctt = ctt + 14; }
+                    else { ctt = ctt + 12; }
+                  }
+              }
+        
+              // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2); 
+              if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; }
+              timetask2 = (ESP.getCycleCount() - clastsampletime) >> 8;  
+
+              ctt = 3;
+              for (int id = 0; id < 3; id++) {
+                if (imuenable[id] == 1) {
+                  if (imubus[id] != 0) { // Just realign:
+                    if (imutype[id] == 0) { ctt = ctt + 14; }
+                    else { ctt = ctt + 12; }
+                  } else { // Copy readings from the other Task:                 
+                    int nbytes = 14;
+                    if (imutype[id] == 1) { nbytes = 12; }
+                    for (int iii = 0; iii < nbytes; iii++) {
+                      tdata.data[ctt++] = lastimureadings[id].pop();
                     }
                   }
-                  if (imutype[id] == 0) { ctt = ctt + 14; }
-                  else { ctt = ctt + 12; }
-                }
-            }
-      
-            // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
-            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2); 
-            if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
+                }                                      
+              }
 
-            ctt = 3;
-            for (int id = 0; id < 3; id++) {
-              if (imuenable[id] == 1) {
-                if (imubus[id] != 0) { // Just realign:
-                  if (imutype[id] == 0) { ctt = ctt + 14; }
-                  else { ctt = ctt + 12; }
-                } else { // Copy readings from the other Task:                 
-                  int nbytes = 14;
-                  if (imutype[id] == 1) { nbytes = 12; }
-                  for (int iii = 0; iii < nbytes; iii++) {
-                    tdata.data[ctt++] = lastimureadings[id].pop();
-                  }
-                }
-              }                                      
-            }
-
-            // Signal Generators:
-            for (int id = 0; id < 4; id++) {
-                if (id < 2) {
-                  tdata.data[ctt++] = (outscaler[id].lastwrittenout >> 8) & 0xFF;
-                  tdata.data[ctt++] = outscaler[id].lastwrittenout & 0xFF;
-                } else {
-                  tdata.data[ctt++] = outscaler[id].lastwrittenout;
-                }        
-            }
-            
-            // Send ADC Readings:
-            if ((adcconfig[0] & 0x0F) > 0) {
-              if (adcreadings.count() != CTTRatio) {
-                errorflags = errorflags | 0x02; // Set IncompleteADCRead error
-                adcreadings.clear();
-                for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
-                  tdata.data[ctt++] = 0;
-                  tdata.data[ctt++] = 0;
-                }
-              } else {
-                for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
-                  if (iii < CTTRatio) {
-                    int16_t adcaux = adcreadings.pop();
-                    tdata.data[ctt++] = adcaux >> 8;
-                    tdata.data[ctt++] = adcaux & 0xFF;
+              // Signal Generators:
+              for (int id = 0; id < 4; id++) {
+                  if (id < 2) {
+                    tdata.data[ctt++] = (outscaler[id].lastwrittenout >> 8) & 0xFF;
+                    tdata.data[ctt++] = outscaler[id].lastwrittenout & 0xFF;
                   } else {
+                    tdata.data[ctt++] = outscaler[id].lastwrittenout;
+                  }        
+              }
+              
+              // Send ADC Readings:
+              if ((adcconfig[0] & 0x0F) > 0) {
+                int16_t adcaux = adcreadings.pop();
+                tdata.data[ctt++] = adcaux >> 8;
+                tdata.data[ctt++] = adcaux & 0xFF;   
+                for (int iii = 0; iii < 3; iii++) {
+                  tdata.data[ctt++] = 0;
+                  tdata.data[ctt++] = 0;  
+                }                                         
+              }
+              
+              // timesample = tcount2queue.pop(); // Tempo amostragem
+              // timerReadMicros(timer0cfg);
+              timetask1 = (ESP.getCycleCount() - clastsampletime) >> 8;  // Tempo na task 1
+              // timetask2 = tcount2queue.pop(); // Tempo na task 2
+
+              
+              tdata.data[ctt++] = (timesample >> 8) & 0xFF;
+              tdata.data[ctt++] = timesample & 0xFF;
+              tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
+              tdata.data[ctt++] = timetask1 & 0xFF;
+              tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
+              tdata.data[ctt++] = timetask2 & 0xFF;
+              tdata.data[ctt++] = errorflags;
+              tdata.nbytes = ctt;
+
+              uxBits = xEventGroupSetBits(xEventGroup, 0x04);
+
+
+            } else {
+
+
+              errorflags = 0;   
+              // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+              uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
+              // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+              if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; } 
+
+              tdata.nbytes = 0;                      
+              
+              ctt = 0;
+              // First 3 bytes for sync:
+              tdata.data[ctt++] = 0xF;
+              tdata.data[ctt++] = 0xF;
+              tdata.data[ctt++] = 0xF;
+
+              // IMU Readings:
+              for (int id = 0; id < 3; id++) {
+                  if (imuenable[id] == 1) {  
+                    if (imubus[id] != 0) {
+                      if (imutype[id] == 0) {
+                        mpus[id].readData(&tdata.data[ctt]);                    
+                      } else {
+                        lsms[id].readRegisterRegion(&tdata.data[ctt],0x22,12);
+                      }
+                    }
+                    if (imutype[id] == 0) { ctt = ctt + 14; }
+                    else { ctt = ctt + 12; }
+                  }
+              }
+        
+              // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2); 
+              if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; } 
+
+              ctt = 3;
+              for (int id = 0; id < 3; id++) {
+                if (imuenable[id] == 1) {
+                  if (imubus[id] != 0) { // Just realign:
+                    if (imutype[id] == 0) { ctt = ctt + 14; }
+                    else { ctt = ctt + 12; }
+                  } else { // Copy readings from the other Task:                 
+                    int nbytes = 14;
+                    if (imutype[id] == 1) { nbytes = 12; }
+                    for (int iii = 0; iii < nbytes; iii++) {
+                      tdata.data[ctt++] = lastimureadings[id].pop();
+                    }
+                  }
+                }                                      
+              }
+
+              // Signal Generators:
+              for (int id = 0; id < 4; id++) {
+                  if (id < 2) {
+                    tdata.data[ctt++] = (outscaler[id].lastwrittenout >> 8) & 0xFF;
+                    tdata.data[ctt++] = outscaler[id].lastwrittenout & 0xFF;
+                  } else {
+                    tdata.data[ctt++] = outscaler[id].lastwrittenout;
+                  }        
+              }
+              
+              // Send ADC Readings:
+              if ((adcconfig[0] & 0x0F) > 0) {
+                if (adcreadings.count() != CTTRatio) {
+                  errorflags = errorflags | 0x02; // Set IncompleteADCRead error
+                  adcreadings.clear();
+                  for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
                     tdata.data[ctt++] = 0;
-                    tdata.data[ctt++] = 0; 
-                  }                  
-                }                
-              }                            
+                    tdata.data[ctt++] = 0;
+                  }
+                } else {
+                  for (int iii = 0; iii < 4; iii++) {  // TODO: change limit to 5 to deal with 5 ms.
+                    if (iii < CTTRatio) {
+                      int16_t adcaux = adcreadings.pop();
+                      tdata.data[ctt++] = adcaux >> 8;
+                      tdata.data[ctt++] = adcaux & 0xFF;
+                    } else {
+                      tdata.data[ctt++] = 0;
+                      tdata.data[ctt++] = 0; 
+                    }                  
+                  }                
+                }                            
+              }
+              
+              timesample = tcount2queue.pop(); // Tempo amostragem
+              timerReadMicros(timer0cfg);
+              timetask1 = timerReadMicros(timer0cfg) - tcount2queue.pop();  // Tempo na task 1
+              timetask2 = tcount2queue.pop(); // Tempo na task 2
+
+              
+              tdata.data[ctt++] = (timesample >> 8) & 0xFF;
+              tdata.data[ctt++] = timesample & 0xFF;
+              tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
+              tdata.data[ctt++] = timetask1 & 0xFF;
+              tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
+              tdata.data[ctt++] = timetask2 & 0xFF;
+              tdata.data[ctt++] = errorflags;
+              tdata.nbytes = ctt;
+
+              uxBits = xEventGroupSetBits(xEventGroup, 0x04);
+
+
             }
-            
-            timesample = tcount2queue.pop(); // Tempo amostragem
-            timerReadMicros(timer0cfg);
-            timetask1 = timerReadMicros(timer0cfg) - tcount2queue.pop();  // Tempo na task 1
-            timetask2 = tcount2queue.pop(); // Tempo na task 2
 
             
-            tdata.data[ctt++] = (timesample >> 8) & 0xFF;
-            tdata.data[ctt++] = timesample & 0xFF;
-            tdata.data[ctt++] = (timetask1 >> 8) & 0xFF;
-            tdata.data[ctt++] = timetask1 & 0xFF;
-            tdata.data[ctt++] = (timetask2 >> 8) & 0xFF;
-            tdata.data[ctt++] = timetask2 & 0xFF;
-            tdata.data[ctt++] = errorflags;
-            tdata.nbytes = ctt;
-
-            uxBits = xEventGroupSetBits(xEventGroup, 0x04);
 
 
       } else if (controlling) {
@@ -968,7 +1144,11 @@ void MainTask(void * parameter){
               timerStop(timer0cfg);
               timerRestart(timer0cfg);
               timerStart(timer0cfg);
-              for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(4.0); }
+              // if (CTTRatio == 255) {
+              //   for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(F_SAMPLE,1.0); }
+              // } else {
+              //   for (int idd = 0; idd < 4; idd++) { siggen[idd].setFreqMult(1000.0,4.0); }
+              // }              
               xEventGroupClearBits(xEventGroup,0x03); 
               // TickType_t actualtcount = xTaskGetTickCount();
               // xLastWakeTime0 = actualtcount - xFrequency0;
@@ -980,6 +1160,7 @@ void MainTask(void * parameter){
               errorflags = 0;
               reading = true;
               controlling = false;
+              // Serial.write('k');
             }            
             break;
 
@@ -1031,6 +1212,10 @@ void MainTask(void * parameter){
 
           case 'f':            
             hascmd = 'f';
+            break;
+
+          case 'm':            
+            hascmd = 'm';
             break;
 
           case 'p':
@@ -1249,11 +1434,30 @@ void MainTask(void * parameter){
           case 'f':
             if (Serial.available() > 0) {
               CTTRatio =  Serial.read();
+              T_SAMPLE_us = ((uint16_t)CTTRatio) * 1000;
               T_SAMPLE = ((float)CTTRatio) * 1e-3;
               F_SAMPLE = 1.0 / T_SAMPLE;
               xFrequency0 = CTTRatio; 
               Serial.write("f");
               Serial.write(CTTRatio);  
+              cthascmd = 0;
+              hascmd = 0;
+            } 
+            break;
+
+          case 'm':
+            if (Serial.available() > 0) {
+              CTTRatio = 255;
+              int16_t raux = (Serial.read() << 8);
+              raux = raux + Serial.read();
+              T_SAMPLE_us = raux;
+              T_SAMPLE_cycles = uint32_t(T_SAMPLE_us) * 240;
+              T_SAMPLE = ((float)raux) * 1e-6;
+              F_SAMPLE = 1.0 / T_SAMPLE;
+              xFrequency0 = CTTRatio; 
+              Serial.write("m");
+              Serial.write((raux >> 8) & 0xFF);
+              Serial.write(raux & 0xFF);
               cthascmd = 0;
               hascmd = 0;
             } 
@@ -1287,7 +1491,11 @@ void MainTask(void * parameter){
               freq = freq + ((float)Serial.read())/100.0;
               int dclevel = (Serial.read() << 8) + Serial.read();
               if (idgerador < 4) {
-                siggen[idgerador].setType(tipo,amp,freq,4.0);
+                if (CTTRatio == 255) {
+                  siggen[idgerador].setType(tipo,amp,freq,1.0,F_SAMPLE);
+                } else {
+                  siggen[idgerador].setType(tipo,amp,freq,4.0,F_SAMPLE);
+                }
                 outscaler[idgerador].adjust(dclevel);
                 if (tipo == 2) {
                   siggen[idgerador].setChirpParams(Serial.read(),Serial.read(),Serial.read(),

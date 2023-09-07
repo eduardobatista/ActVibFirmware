@@ -19,11 +19,11 @@ void LSM6DS3ESP32::changeI2CAddress(uint8_t newaddress) {
     I2CAddress = newaddress;
 }
 
-void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterBandwidth){
+void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterBandwidth, uint8_t ODR){
 
     settings.gyroEnabled = 1;  //Can be 0 or 1
     settings.gyroRange = gyroRange;   //Max deg/s.  Can be: 125, 245, 500, 1000, 2000
-    settings.gyroSampleRate = 0x07; // Corresponding to 1.66 kHz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666
+    settings.gyroSampleRate = ODR; // Corresponding to 1.66 kHz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666
     settings.gyroBandWidth = bwmap[filterBandwidth];  //Hz.  Can be: 50, 100, 200, 400;
     settings.gyroFifoEnabled = 1;  //Set to include gyro in FIFO
     settings.gyroFifoDecimation = 1;  //set 1 for on /1
@@ -33,7 +33,7 @@ void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterB
     settings.accelEnabled = 1;
     settings.accelODROff = 1;
     settings.accelRange = accmap[accelRange]; //Max G force readable.  Can be: 2, 4, 8, 16
-    settings.accelSampleRate = 0x07; // Corresponding to 1.66 kHz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666, 3332, 6664, 13330
+    settings.accelSampleRate = ODR; // Corresponding to 1.66 kHz.  Can be: 13, 26, 52, 104, 208, 416, 833, 1666, 3332, 6664, 13330
     settings.accelBandWidth = bwmap[filterBandwidth];  //Hz.  Can be: 50, 100, 200, 400;
     settings.accelFifoEnabled = 1;  //Set to include accelerometer in the FIFO
     settings.accelFifoDecimation = 1;  //set 1 for on /1
@@ -41,6 +41,12 @@ void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterB
     accelscaler = 0.000061 * GtoMS2 * ((float)(1 >> accelRange));
 
     settings.tempEnabled = 1;
+    
+    if (filterBandwidth == 0) {
+        settings.aliasingBWAuto = true;
+    } else {
+        settings.aliasingBWAuto = false;
+    }
 
     //Select interface mode
     settings.commMode = 1;  //Can be modes 1, 2 or 3
@@ -150,9 +156,14 @@ status_t LSM6DS3ESP32::begin(void)
         dataToWrite |= settings.accelSampleRate << 4;
     }    
     writeRegister(CTRL1_XL, dataToWrite);
+
     // Set the ODR bit:
     readRegister(&dataToWrite, CTRL4_C);
-    dataToWrite |= 0x80;
+    if (settings.aliasingBWAuto) {
+        dataToWrite &= ~(0x80); // Clear XL_BW_SCAL_ODR
+    } else {
+        dataToWrite |= 0x80; // SEt XL_BW_SCAL_ODR
+    }
     writeRegister(CTRL4_C, dataToWrite);
 
     // Setting BDU to 1:

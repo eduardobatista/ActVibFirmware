@@ -88,6 +88,12 @@ SignalGenerator::SignalGenerator(float fsampling, float tsampling) {
     enabled = false;
 }
 
+void SignalGenerator::setType(int tp, float Amp, float freq, float freqmult, float basefreq) {
+  BASE_F_SAMPLE = basefreq;
+  BASE_T_SAMPLE = 1.0/basefreq;
+  setType(tp, Amp, freq, freqmult);
+}
+
 void SignalGenerator::setType(int tp, float Amp, float freq, float freqmult) {
     F_SAMPLE = freqmult * BASE_F_SAMPLE;
     T_SAMPLE = BASE_T_SAMPLE / freqmult;
@@ -114,6 +120,16 @@ void SignalGenerator::setType(int tp, float Amp, float freq, float freqmult) {
     } else { 
         enabled = true; 
     }
+}
+
+void SignalGenerator::setBaseFreq(float freq) {
+    BASE_F_SAMPLE = freq;
+    setFreqMult(1.0);  
+}
+
+void SignalGenerator::setFreqMult(float freqmult, float freq) {
+    BASE_F_SAMPLE = freq;
+    setFreqMult(freqmult);
 }
 
 void SignalGenerator::setFreqMult(float freqmult) {
