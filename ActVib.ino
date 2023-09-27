@@ -117,6 +117,9 @@ CVAFxNLMS cvafxnlms = CVAFxNLMS(100, &wa[0], &xa[0], &wa2[0], &xa2[0], &xasec[0]
 SignalGenerator siggen[4] = {SignalGenerator(F_SAMPLE,T_SAMPLE),SignalGenerator(F_SAMPLE,T_SAMPLE),
                              SignalGenerator(F_SAMPLE,T_SAMPLE),SignalGenerator(F_SAMPLE,T_SAMPLE)};
 OutputScaler outscaler[4] = {OutputScaler(2048),OutputScaler(2048),OutputScaler(128),OutputScaler(128)};
+bool flagpwm[2] = {false,false}; // Only channels 3 and 4 are allowed.
+uint8_t pwmduty[2] = {0,0};
+
 
 // DC removal is needed when working with adaptive control algorithms.
 // Definitions of simple IIR-based DC removers for the two inputs from accelerometers:
@@ -544,6 +547,56 @@ void AuxTask(void * parameter){
             
         } else if (controlling && !debugmode) {  // If Control Mode is on:
 
+          if (CTTRatio == 255) {
+
+            // New version:
+            ctimeleft = cnextsampletime - ESP.getCycleCount(); // Time left for next sample
+            do {              
+              // If time left is "positive" and it is worth to use a delay in microseconds:
+              if ( ((ctimeleft & 0x80000000) == 0) && ((ctimeleft >> 8) > 0) ) {              
+                delayMicroseconds( (ctimeleft >> 8) ); // ctimeleft/256 is always smaller than timeleft/240. Thus, this delay will always be smaller than time left.
+              }
+              ctimeleft = cnextsampletime - ESP.getCycleCount();
+            } while ((ctimeleft & 0x80000000) == 0);
+            cnextsampletime = cnextsampletime + T_SAMPLE_cycles;
+
+            controlqueue.clear();
+
+            // Writing outputs:
+            if (ctrltask == 0) {  // If controlling:       
+              writeOutput(canalperturb,siggen[canalperturb].lastf);
+              writeOutput(canalcontrole,lastout); // TODO: WARNING!!!
+            } else {  // If path modeling:
+              zeroOutput(canalperturb);
+              writeOutput(canalcontrole,siggen[canalcontrole].lastf);
+            }
+
+            uxBits = xEventGroupSetBits(xEventGroup, 0x01); // Set Bit 0 to start MainTask  
+
+            // Read sensors from bus I2C-1, filter readings for DC removal, 
+            // put readings at controlqueue.
+            if (imubus[idRefIMU] == 0) {
+              if (imutype[idRefIMU] == 0) {
+                controlqueue.push(dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor)));
+              } else {
+                controlqueue.push(dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor)));
+              }
+            }
+            if (imubus[idErrIMU] == 0) {
+              if (imutype[idErrIMU] == 0) {
+                controlqueue.push(dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor)));
+              } else {
+                controlqueue.push(dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor)));
+              }
+            }
+            
+            // Notifies TASK 1:
+            uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
+            uxBits = xEventGroupWaitBits(xEventGroup, 0x04, pdTRUE, pdFALSE, 4); // Wait notification from MainTask
+
+          
+          } else {
+
             // Blocks until reaching the time for next sample: --------------------------------------------
             vTaskDelayUntil(&xLastWakeTime1, xFrequency0);
             // --------------------------------------------------------------------------------------------
@@ -586,7 +639,8 @@ void AuxTask(void * parameter){
             // Notifies TASK 1:
             tcount2queue.push(timerReadMicros(timer0cfg) - timecounter2);
             uxBits = xEventGroupSetBits(xEventGroup, 0x02); // Set Bit 0 to unlock MainTask
-            
+          
+          }
 
         } else if (controlling && debugmode) {
 
@@ -892,54 +946,68 @@ void MainTask(void * parameter){
 
           if (!debugmode) {
 
-            if (ctrltask == 1) {
-              siggen[canalcontrole].next();
-            } else {
-              siggen[canalperturb].next();
-            } 
-
-            errorflags = 0;
-            // Clear bits from EventGroup to wait for notifications/flags from AuxTask
-            uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
-            // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
-            uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
-            if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }          
-
-            if (imubus[idRefIMU] != 0) {
-              if (imutype[idRefIMU] == 0) {
-                xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
+              if (ctrltask == 1) {
+                siggen[canalcontrole].next();
               } else {
-                xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
-              }
-            }
-            if (imubus[idErrIMU] != 0) {
-              if (imutype[idErrIMU] == 0) {
-                xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
-              } else {
-                xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
-              }            
-            }
+                siggen[canalperturb].next();
+              } 
 
-            // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
-            uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
-            if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; }
-
-            if (imubus[idRefIMU] == 0) {
-              if (controlqueue.count() == 0) { 
-                errorflags = errorflags | 0x08;
-                xref = 0;
-              } else {
-                xref = controlqueue.pop();
-              }            
-            } 
-            if (imubus[idErrIMU] == 0) {
-              if (controlqueue.count() == 0) { 
-                errorflags = errorflags | 0x10;
-                xerr = 0;
-              } else {
-                xerr = controlqueue.pop();
+              errorflags = 0;
+              // Clear bits from EventGroup to wait for notifications/flags from AuxTask
+              uxBits = xEventGroupClearBits(xEventGroup,0x03); // Clear bits 1 and 0
+              // Wait for notification (flag, bit 0) from AuxTask (expires in 20 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x01, pdTRUE, pdFALSE, 20);
+              if ( (uxBits & 0x01) == 0 ) { errorflags = errorflags | 0x01; }
+              if (CTTRatio == 255) {
+                clastsampletime = ESP.getCycleCount();
+                timesample = (clastsampletime - ctimeaux) / 240;
+                ctimeaux = clastsampletime;
               }          
-            } 
+
+              if (imubus[idRefIMU] != 0) {
+                if (imutype[idRefIMU] == 0) {
+                  xref = dcr[0].filter(mpus[idRefIMU].readSensor(idRefIMUSensor));
+                } else {
+                  xref = dcr[0].filter(lsms[idRefIMU].readSensor(idRefIMUSensor));
+                }
+              }
+              if (imubus[idErrIMU] != 0) {
+                if (imutype[idErrIMU] == 0) {
+                  xerr = dcr[1].filter(mpus[idErrIMU].readSensor(idErrIMUSensor));
+                } else {
+                  xerr = dcr[1].filter(lsms[idErrIMU].readSensor(idErrIMUSensor));
+                }            
+              }
+
+              // Wait for notification (flag, bit 1) from AuxTask (expires in 2 ms):
+              uxBits = xEventGroupWaitBits(xEventGroup, 0x02, pdTRUE, pdFALSE, 2 ); 
+              if ( (uxBits & 0x02) == 0 ) { errorflags = errorflags | 0x02; }
+              if (CTTRatio == 255) {
+                timetask2 = (ESP.getCycleCount() - clastsampletime) >> 8;  
+              }
+
+              uxBits = xEventGroupSetBits(xEventGroup, 0x04);
+              
+
+              if (imubus[idRefIMU] == 0) {
+                if (controlqueue.count() == 0) { 
+                  errorflags = errorflags | 0x08;
+                  xref = 0;
+                } else {
+                  xref = controlqueue.pop();
+                }            
+              } 
+              if (imubus[idErrIMU] == 0) {
+                if (controlqueue.count() == 0) { 
+                  errorflags = errorflags | 0x10;
+                  xerr = 0;
+                } else {
+                  xerr = controlqueue.pop();
+                }          
+              } 
+
+
+            
 
           }
           
@@ -1029,7 +1097,8 @@ void MainTask(void * parameter){
 
             }
 
-            timetask1 = timerReadMicros(timer0cfg);
+            
+            
           
             // Sending data to the host computer: --------------------------
             // The first three bytes are used for synchronization. 
@@ -1057,11 +1126,23 @@ void MainTask(void * parameter){
             ctt = ctt + 4;
             tdata.data[ctt++] = ctrlflags;
 
-            timesample = tcount2queue.pop(); // Tempo amostragem
+            if (CTTRatio == 255) {
 
-            timetask1 = timetask1 - tcount2queue.pop();  // Tempo na task 1
+              timetask1 = (ESP.getCycleCount() - clastsampletime) >> 8;
 
-            timetask2 = tcount2queue.pop(); // Tempo na task 2
+            } else {
+
+              timetask1 = timerReadMicros(timer0cfg);
+
+              timesample = tcount2queue.pop(); // Tempo amostragem
+
+              timetask1 = timetask1 - tcount2queue.pop();  // Tempo na task 1
+
+              timetask2 = tcount2queue.pop(); // Tempo na task 2
+
+            }
+
+            
 
             tdata.data[ctt++] = (timesample >> 8 & 0xFF);
             tdata.data[ctt++] = timesample & 0xFF;
@@ -1500,6 +1581,18 @@ void MainTask(void * parameter){
                 if (tipo == 2) {
                   siggen[idgerador].setChirpParams(Serial.read(),Serial.read(),Serial.read(),
                                                   Serial.read(),(Serial.read() << 8) + Serial.read());
+                } 
+                if ((tipo == 4) && (idgerador > 1)) {
+                  pwmduty[idgerador-2] = Serial.read();
+                  siggen[idgerador].enabled = false;
+                  if (flagpwm[idgerador-2]) {
+                    ledcSetup(idgerador-2,50.0,8);
+                    ledcAttachPin(23+idgerador,idgerador-2);
+                  }
+                  flagpwm[idgerador-2] = true;                                    
+                } else {
+                  flagpwm[idgerador-2] = false;
+                  pwmduty[idgerador-2] = 0;
                 }
               }
               if (controlling) { siggen[idgerador].setFreqMult(1.0); }

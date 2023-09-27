@@ -98,22 +98,22 @@ void SignalGenerator::setType(int tp, float Amp, float freq, float freqmult) {
     F_SAMPLE = freqmult * BASE_F_SAMPLE;
     T_SAMPLE = BASE_T_SAMPLE / freqmult;
     type = tp;
-    if (type == 0) {
+    if (type == 0) { // Noise
         A = Amp;
-    } else if ((type == 1) || (type == 2)) {
+    } else if ((type == 1) || (type == 2)) { // Harmonic and Chirp
         A = Amp;
         f = freq;
         sincnst = 2.0 * M_PI * f * T_SAMPLE; 
         n = -1.0;
         integ = 0.0;
         cA = Amp/(2*M_PI*freq*2*M_PI*freq);
-    } else if (type == 4) {
+    } else if (type == 4) { // Square
         A = Amp;
         f = freq; 
         Psize2 = ((int)round(1.0/freq / T_SAMPLE)) >> 1; 
         n = -1.0;
         lastf = A;
-    }
+    } 
     if (Amp == 0.0) { 
         enabled = false; 
         lastf = 0.0;
@@ -185,7 +185,7 @@ float SignalGenerator::next() {
           A = -A;
         }
         lastf = A;        
-      }
+      } 
       return lastf;
 }
 
