@@ -87,7 +87,7 @@ void MPU6050A::setAccelScale(uint8_t conf) {
 }
 
 void MPU6050A::initMPU() {
-      writeRegMPU(PWR_MGMT_1,0); // escreve 0 no registro de gerenciamento de energia(0x68), colocando o sensor em o modo ACTIVE
+      writeRegMPU(PWR_MGMT_1,0); // escreve 0 no registro de gerenciamento de energia(0x68), colocando o sensor em modo ACTIVE
       setGyroScale(0);
       setAccelScale(0);
 }

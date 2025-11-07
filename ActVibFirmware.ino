@@ -95,9 +95,18 @@ FIRFilter filtsec = FIRFilter(1,&wsec[0],&xsec[0]); // FIR filter declaration
 int Nfbk = 0;
 float wfbk[3000];
 float xfbk[3000];
-FIRFilter filtfbk = FIRFilter(1,&wfbk[0],&xfbk[0]);
+FIRFilter filtfbkstd = FIRFilter(1,&wfbk[0],&xfbk[0]);
 float xsec2[3000];
 FIRFilter filtsec2 = FIRFilter(1,&wsec[0],&xsec2[0]); // Same coef. vector as filtsec, since filtsec and filtsec are never used together.
+
+FIRFilterSVD filtsecsvd = FIRFilterSVD(10,10,5,2,&wsec[0],&xsec[0]);
+FIRFilterSVD filtfbksvd = FIRFilterSVD(10,10,5,2,&wfbk[0],&xfbk[0]);
+
+FIRFilter *filtfbk = &filtfbkstd;
+
+bool flagsvdfiltsec = false;
+bool flagsvdfiltfbk = false;
+
 
 /*
    In the following, we have definitions of the active vibration control algorithms: FxNLMS and the proposed CVAFxNLMS 
@@ -304,16 +313,40 @@ void getPaths() {
   unsigned char type = Serial.read(); // Tipo de informação a gravar.
   Serial.readBytes(cbuf,2); //número de bytes a ser lido.
   nbytes = ((int)cbuf[0] << 8) + (int)cbuf[1];
-  if ((type == 's') || (type == 'f')) {
+  if ((type == 's') || (type == 'f') || (type == 'S') || (type == 'F')) {
     if (type == 's') { 
       tptr = (unsigned char *) wsec; 
       Nsec = nbytes >> 2;
       filtsec.setMem(Nsec);
       filtsec2.setMem(Nsec);
+      fxnlms.setFiltSec(&filtsec);
+      flagsvdfiltsec = false;
     } else if (type == 'f') {
       tptr = (unsigned char *) wfbk; 
       Nfbk = nbytes >> 2;
-      filtfbk.setMem(Nfbk);
+      filtfbk = &filtfbkstd;
+      filtfbk->setMem(Nfbk);
+      flagsvdfiltfbk = false;
+    } else if (type == 'S') {
+      tptr = (unsigned char *) wsec;
+      Serial.readBytes(cbuf,5);
+      Nsec = ((int)cbuf[0] << 8) + (int)cbuf[1];
+      int branches = (int)cbuf[2];
+      int RR = (int)cbuf[3];
+      int CC = (int)cbuf[4];
+      filtsecsvd.setAllParams(Nsec,branches,RR,CC,&wsec[0],&xsec[0]);
+      fxnlms.setFiltSec(&filtsecsvd);
+      flagsvdfiltsec = true;
+    } else if (type == 'F') {
+      tptr = (unsigned char *) wfbk; 
+      Serial.readBytes(cbuf,5);
+      Nfbk = ((int)cbuf[0] << 8) + (int)cbuf[1];
+      int branches = (int)cbuf[2];
+      int RR = (int)cbuf[3];
+      int CC = (int)cbuf[4];
+      filtfbksvd.setAllParams(Nfbk,branches,RR,CC,&wfbk[0],&xfbk[0]);
+      filtfbk = &filtfbksvd;
+      flagsvdfiltfbk = true;
     }
     Serial.write('k');
     ct = 0;
@@ -335,28 +368,82 @@ void getPaths() {
     are sent to the ESP32 from the host computer.
 */
 void loadFlashData() {
+  // File fcfg = SPIFFS.open("/pathconfigs.dat",FILE_READ);
+  // if (!fcfg) {
+  //   Serial.println("pathconfigs.dat not found.");
+  //   flagsvdfiltfbk = false;
+  //   fxnlms.setFiltSec(&filtsec);
+  //   flagsvdfiltsec = false;
+  //   filtfbk = &filtfbkstd;
+  // } else {
+  //   if (fcfg.read() == 'S') {
+  //     flagsvdfiltsec = true;
+  //   } else {
+  //     flagsvdfiltsec = false;
+  //     fxnlms.setFiltSec(&filtsec);
+  //   }
+  //   if (fcfg.read() == 'F') {
+  //     flagsvdfiltfbk = true;
+  //   } else {
+  //     flagsvdfiltfbk = false;
+  //     filtfbk = &filtfbkstd;
+  //   }
+  //   if (flagsvdfiltsec) {
+  //     int Naux = 0;
+  //     fcfg.read((uint8_t *)&Naux,4);
+  //     int Baux = 0;
+  //     fcfg.read((uint8_t *)&Baux,4);
+  //     int Raux = 0;
+  //     fcfg.read((uint8_t *)&Raux,4);
+  //     int Caux = 0;
+  //     fcfg.read((uint8_t *)&Caux,4);
+  //     Nsec = Naux;
+  //     filtsecsvd.setAllParams(Nsec,Baux,Raux,Caux,&wsec[0],&xsec[0]);
+  //     fxnlms.setFiltSec(&filtsecsvd);
+  //   } 
+  //   if (flagsvdfiltfbk) {
+  //     int Naux = 0;
+  //     fcfg.read((uint8_t *)&Naux,4);
+  //     int Baux = 0;
+  //     fcfg.read((uint8_t *)&Baux,4);
+  //     int Raux = 0;
+  //     fcfg.read((uint8_t *)&Raux,4);
+  //     int Caux = 0;
+  //     fcfg.read((uint8_t *)&Caux,4);
+  //     Nfbk = Naux;
+  //     filtfbksvd.setAllParams(Nfbk,Baux,Raux,Caux,&wfbk[0],&xfbk[0]);
+  //     filtfbk = &filtfbksvd;
+  //   }
+  //   Serial.println("Success reading pathconfigs.");
+  //   fcfg.close();
+  // }
   File file = SPIFFS.open("/wsec.dat",FILE_READ);
   if (!file) {
     Serial.println("Sec path not found.");
   } else {
-    Nsec = (int)(file.size() / sizeof(float));
+    if (!flagsvdfiltsec) {
+      Nsec = (int)(file.size() / sizeof(float));
+    }
     file.read((uint8_t *)&wsec[0],file.size());
     Serial.println("Success reading wsec.");
     Serial.println(Nsec);
     file.close();
     filtsec.setMem(Nsec);
     filtsec2.setMem(Nsec);  
+    if (flagsvdfiltsec) { filtsecsvd.reset(); }
   }
   file = SPIFFS.open("/wfbk.dat",FILE_READ);
   if (!file) {
     Serial.println("Feedback not found in mem.");
   } else {
-    Nfbk = (int)(file.size() / sizeof(float));
+    if (!flagsvdfiltfbk) {
+      Nfbk = (int)(file.size() / sizeof(float));
+    }    
     file.read((uint8_t *)&wfbk[0],file.size());
     Serial.println("Success reading wfbk.");
     Serial.println(Nfbk);
     file.close();
-    filtfbk.setMem(Nfbk);
+    filtfbk->setMem(Nfbk);
   }
   file = SPIFFS.open("/predist.dat",FILE_READ);
   if (!file) {
@@ -1045,7 +1132,7 @@ void MainTask(void * parameter){
 
                 case 0:
                   if (algOn) {
-                    xreff = xref - filtfbk.filter(lastout);
+                    xreff = xref - filtfbk->filter(lastout);
                     fxnlms.updateStep1();
                     fxnlms.filter(xreff);
                     fxnlms.updateStep2(xerr);
@@ -1055,7 +1142,7 @@ void MainTask(void * parameter){
               
                 case 1:
                   if (algOn) { 
-                    xreff = xref - filtfbk.filter(lastout);
+                    xreff = xref - filtfbk->filter(lastout);
                     fxnlms.filter(xreff);
                     lastout = fxnlms.y;
                     fxnlms.update(xerr);
@@ -1064,9 +1151,9 @@ void MainTask(void * parameter){
 
                 case 2:
                   if (algOn) {
-                    xreff = xref - filtfbk.filter(lastout);
+                    xreff = xref - filtfbk->filter(lastout);
                     cvafxnlms.updateStep1();
-                    cvafxnlms.filter(xreff,filtfbk.y);
+                    cvafxnlms.filter(xreff,filtfbk->y);
                     cvafxnlms.updateStep2(xerr);
                     lastout = cvafxnlms.y;
                   }
@@ -1074,8 +1161,8 @@ void MainTask(void * parameter){
               
                 case 3:
                   if (algOn) {
-                    xreff = xref - filtfbk.filter(lastout);
-                    cvafxnlms.filter(xreff,filtfbk.y);
+                    xreff = xref - filtfbk->filter(lastout);
+                    cvafxnlms.filter(xreff,filtfbk->y);
                     lastout = cvafxnlms.y;
                     cvafxnlms.update(xerr);                    
                   }
@@ -1252,9 +1339,13 @@ void MainTask(void * parameter){
               dcr[1].reset();
               if ((algchoice == 0) || (algchoice == 1)) { fxnlms.reset(); }
               else if ((algchoice == 2) || (algchoice == 3)) { cvafxnlms.reset(); }
-              filtsec.reset();
-              filtsec2.reset();
-              filtfbk.reset();
+              if (!flagsvdfiltsec) {
+                filtsec.reset();
+                filtsec2.reset();
+              } else {
+                filtsecsvd.reset();
+              }
+              filtfbk->reset();
               lastout = 0;
               // TODO: check the following
               // dclevel = outscale[canalcontrole].dclevel;              
@@ -1357,7 +1448,32 @@ void MainTask(void * parameter){
           case 'P':
             if (!reading && !controlling) {
               bool flagok = true;
-              File file = SPIFFS.open("/wsec.dat",FILE_WRITE);
+              File file = SPIFFS.open("/pathconfigs.dat",FILE_WRITE);
+              if(!file){ 
+                Serial.print("er2"); 
+                flagok = false;
+              } else {
+                if (!flagsvdfiltsec) {
+                  file.write('s');
+                } else {
+                  file.write('S');
+                }
+                if (!flagsvdfiltfbk) {
+                  file.write('f');
+                } else {
+                  file.write('F');
+                }                
+                file.write((uint8_t*)&(filtsecsvd.N),4);
+                file.write((uint8_t*)&(filtsecsvd.B),4);
+                file.write((uint8_t*)&(filtsecsvd.R),4);
+                file.write((uint8_t*)&(filtsecsvd.C),4);
+                file.write((uint8_t*)&(filtfbksvd.N),4);
+                file.write((uint8_t*)&(filtfbksvd.B),4);
+                file.write((uint8_t*)&(filtfbksvd.R),4);
+                file.write((uint8_t*)&(filtfbksvd.C),4);
+                file.close();
+              }
+              file = SPIFFS.open("/wsec.dat",FILE_WRITE);
               if(!file){ 
                 Serial.print("er0"); 
                 flagok = false;
@@ -1586,8 +1702,9 @@ void MainTask(void * parameter){
                   pwmduty[idgerador-2] = Serial.read();
                   siggen[idgerador].enabled = false;
                   if (flagpwm[idgerador-2]) {
-                    ledcSetup(idgerador-2,50.0,8);
-                    ledcAttachPin(23+idgerador,idgerador-2);
+                    // ledcSetup(idgerador-2,50.0,8);
+                    // ledcAttachPin(23+idgerador,idgerador-2);
+                    ledcAttach(23+idgerador,50.0,8);
                   }
                   flagpwm[idgerador-2] = true;                                    
                 } else {
@@ -1715,7 +1832,7 @@ void setup() {
   Serial.begin(500000);
   Serial.setTimeout(10);
 
-  timer0cfg = timerBegin(0, 2, true);
+  timer0cfg = timerBegin(40000000);
 
   SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI, VSPI_SS); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);

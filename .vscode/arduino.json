@@ -1,7 +1,19 @@
 {
-    "board": "esp32:esp32:nodemcu-32s",
-    "configuration": "FlashFreq=80,UploadSpeed=921600",
-    "sketch": "ActVib.ino",
+  "board": "esp32:esp32:nodemcu-32s",
+  "configuration": "UploadSpeed=115200,FlashFreq=80,DebugLevel=none,EraseFlash=none",
+  "sketch": "ActVib.ino",
+  "port": "/dev/ttyUSB0",
+  "output": "output",
+  "monitorPortSettings": {
     "port": "/dev/ttyUSB0",
-    "output": "output"
+    "baudRate": 115200,
+    "lineEnding": "\r\n",
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": "one"
+  },
+  "configurationRequired": true,
+  "programmer": "esptool",
+  "optimize_for_debug": false,
+  "useProgrammer": false
 }
