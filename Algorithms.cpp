@@ -114,7 +114,7 @@ float FIRFilterSVD::filter(float xn) {
 
 // FxNLMS algorithm: -----------------------------------------------
 
-FxNLMS::FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec, float *deltawa) {
+FxNLMS::FxNLMS(int mem, float *wa, float *xa, float *xasec, float (*fsecfilter)(float), float *deltawa) {
     N = mem;
     mu = 0.25;
     fi = 1e-4;
@@ -122,7 +122,7 @@ FxNLMS::FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec, flo
     deltaw = deltawa;
     x = xa;
     xsec = xasec;
-    filtsec = fsec;
+    filtsec =  fsecfilter;
     reset();
 }
 
@@ -131,10 +131,6 @@ void FxNLMS::setParameters(int mem, float muu, float fii) {
     mu = muu;
     fi = fii;
     reset();
-}
-
-void FxNLMS::setFiltSec(FIRFilter *fsec) {
-    filtsec = fsec;
 }
 
 void FxNLMS::reset() {
@@ -146,13 +142,13 @@ void FxNLMS::reset() {
     }
     y = 0;
     ptr = N-1;
-    filtsec->reset();
+    // filtsec->reset();
 }
 
 float FxNLMS::filter(float xn) {      
     ptr++;
     if (ptr >= N) { ptr = 0; }
-    *(xsec+ptr) = (*filtsec).filter(xn);
+    *(xsec+ptr) = (*filtsec)(xn);
     *(x+ptr) = xn;
     y = 0;
     for (int k = 0; k < N; k++) {

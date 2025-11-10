@@ -1,6 +1,6 @@
 {
   "board": "esp32:esp32:nodemcu-32s",
-  "configuration": "UploadSpeed=115200,FlashFreq=80,DebugLevel=none,EraseFlash=none",
+  "configuration": "UploadSpeed=460800,FlashFreq=80,DebugLevel=none,EraseFlash=none",
   "sketch": "ActVib.ino",
   "port": "/dev/ttyUSB0",
   "output": "output",

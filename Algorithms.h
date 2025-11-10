@@ -22,7 +22,7 @@ class FIRFilter {
 
 };
 
-class FIRFilterSVD : public FIRFilter {
+class FIRFilterSVD {
 
     private:
         int ptr = 0;
@@ -64,12 +64,11 @@ class FxNLMS {
         float fi;
         int N = 5;
         int Nsec = 5;
-        FIRFilter *filtsec;
+        float (*filtsec)(float);
         float normterm;
         float aux;
-        FxNLMS(int mem, float *wa, float *xa, float *xasec, FIRFilter *fsec, float *deltawa);
+        FxNLMS(int mem, float *wa, float *xa, float *xasec, float (*fsecfilter)(float), float *deltawa);
         void setParameters(int mem, float muu, float fii);
-        void setFiltSec(FIRFilter *fsec);
         void reset();
         float filter(float xn);
         void update(float en);
