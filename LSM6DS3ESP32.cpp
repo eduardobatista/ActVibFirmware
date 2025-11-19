@@ -28,7 +28,7 @@ void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterB
     settings.gyroFifoEnabled = 1;  //Set to include gyro in FIFO
     settings.gyroFifoDecimation = 1;  //set 1 for on /1
 
-    gyroscaler = 0.004375 * ((float)(1 >> gyroRange));
+    gyroscaler = 0.004375 * ((float)(1 << gyroRange));
 
     settings.accelEnabled = 1;
     settings.accelODROff = 1;
@@ -38,7 +38,7 @@ void LSM6DS3ESP32::config(uint8_t gyroRange, uint8_t accelRange, uint8_t filterB
     settings.accelFifoEnabled = 1;  //Set to include accelerometer in the FIFO
     settings.accelFifoDecimation = 1;  //set 1 for on /1
 
-    accelscaler = 0.000061 * GtoMS2 * ((float)(1 >> accelRange));
+    accelscaler = 0.000061 * GtoMS2 * ((float)(1 << accelRange));
 
     settings.tempEnabled = 1;
     
