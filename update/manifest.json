@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "chip": "esp32",
+  "baud": 460800,
+  "before": "default-reset",
+  "after": "hard-reset",
+  "files": [
+    {
+      "offset": "0x1000",
+      "name": "ActVibFirmware.ino.bootloader.bin",
+      "sha256": "36f01ecea5c2bf97b99ad1e9c68ca88dffec7256e58e83263e384e0154046aa9"
+    },
+    {
+      "offset": "0x8000",
+      "name": "ActVibFirmware.ino.partitions.bin",
+      "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"
+    },
+    {
+      "offset": "0xe000",
+      "name": "boot_app0.bin",
+      "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+    },
+    {
+      "offset": "0x10000",
+      "name": "ActVibFirmware.ino.bin",
+      "sha256": "dde18d247546b45f5931c54d616376231002a2d26e10d41496b1768ca30dc6e2"
+    }
+  ]
+}
